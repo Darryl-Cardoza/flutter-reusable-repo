@@ -1,7 +1,3 @@
-# .github/workflows/reusable-ci.yml
-# This workflow lives in a central repository for reusable workflows.
-# It handles building, analyzing, testing, and creating artifacts for a Flutter project.
-
 name: "Reusable Flutter CI"
 
 on:
@@ -27,14 +23,14 @@ on:
         required: false
 
 jobs:
-  # This job sets up the environment and dependencies once.
-  # It then uploads the entire workspace as an artifact for other jobs to use.
-  setup:
-    name: Setup Environment & Dependencies
+  analyze_and_test:
+    name: Analyze & Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -47,35 +43,10 @@ jobs:
         with:
           flutter-version: ${{ inputs.flutter_version }}
           channel: ${{ inputs.flutter_channel }}
-          cache: true # Enable caching for faster subsequent runs
+          cache: true 
 
       - name: Install Dependencies
         run: flutter pub get
-
-      - name: Upload Workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: workspace
-          path: .
-
-  # This job runs analysis and tests in parallel.
-  analyze_and_test:
-    name: Analyze & Test
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: workspace
-          path: .
-      
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ inputs.flutter_version }}
-          channel: ${{ inputs.flutter_channel }}
-          cache: true
 
       - name: Run Dart Analyzer
         run: dart analyze > analyzer-report.txt
@@ -95,7 +66,6 @@ jobs:
           name: coverage-info
           path: coverage/lcov.info
 
-  # This job specifically checks if coverage meets the threshold.
   check_coverage:
     name: Verify Test Coverage
     needs: analyze_and_test
@@ -121,18 +91,65 @@ jobs:
             echo "Success: Code coverage meets the threshold."
           fi
 
-  # Build the Android APK.
-  build_android:
-    name: Build Android APK
-    needs: [check_coverage, analyze_and_test]
+  security_analysis:
+    name: Security & Quality Analysis
+    needs: analyze_and_test
+    if: (secrets.SONAR_TOKEN != '' || secrets.CODACY_PROJECT_TOKEN != '')
     runs-on: ubuntu-latest
     steps:
-      - name: Download Workspace
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter (for pub)
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: ${{ inputs.flutter_channel }}
+          cache: true
+
+      - name: Download Coverage Info
         uses: actions/download-artifact@v4
         with:
-          name: workspace
+          name: coverage-info
           path: .
-          
+
+      - name: Run SonarCloud Scan
+        if: secrets.SONAR_TOKEN != ''
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=your-sonar-org
+            -Dsonar.projectKey=your-project-key
+            -Dsonar.sources=lib
+            -Dsonar.tests=test
+            -Dsonar.dart.coverage.lcovReportPath=lcov.info
+
+      - name: Run Codacy Scan
+        if: secrets.CODACY_PROJECT_TOKEN != ''
+        uses: codacy/codacy-analysis-cli-action@v4
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: lcov.info
+
+  build_android:
+    name: Build Android APK
+    needs: [check_coverage, security_analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -145,39 +162,41 @@ jobs:
           flutter-version: ${{ inputs.flutter_version }}
           channel: ${{ inputs.flutter_channel }}
           cache: true
-      
+
+      - name: Install Dependencies
+        run: flutter pub get
+
       - name: Build APK
         run: flutter build apk --split-per-abi
-      
+
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-apk
           path: build/app/outputs/flutter-apk/
 
-  # Build the iOS App (conditionally).
   build_ios:
     name: Build iOS App
     if: ${{ inputs.build_ios }}
-    needs: [check_coverage, analyze_and_test]
-    runs-on: macos-latest # iOS builds MUST run on macOS
+    needs: [check_coverage, security_analysis]
+    runs-on: macos-latest 
     steps:
-      - name: Download Workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: workspace
-          path: .
-      
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter_version }}
           channel: ${{ inputs.flutter_channel }}
           cache: true
-      
+
+      - name: Install Dependencies
+        run: flutter pub get
+
       - name: Build iOS IPA
         run: flutter build ipa --no-codesign
-      
+
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
