@@ -82,8 +82,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./apks/app-armeabi-v8a-release.apk
-          asset_name: app-armeabi-v8a-v${{ steps.version_check.outputs.version }}.apk
+          asset_path: ./apks/app-arm64-v8a-release.apk
+          asset_name: app-arm64-v8a-v${{ steps.version_check.outputs.version }}.apk
           asset_content_type: application/vnd.android.package-archive
 
   deploy:
