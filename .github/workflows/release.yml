@@ -37,15 +37,37 @@ jobs:
           name: build-apk
           path: apks
 
+      - name: Determine Next Version
+        id: version_check
+        run: |
+          BASE_VERSION="${{ inputs.version }}"
+          echo "Checking if tag v${BASE_VERSION} exists..."
+
+          # Fetch all tags
+          git fetch --tags
+
+          # If tag already exists, increment patch version automatically
+          if git rev-parse "v${BASE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${BASE_VERSION} already exists. Calculating next version..."
+            IFS='.' read -r major minor patch <<<"${BASE_VERSION}"
+            next_patch=$((patch + 1))
+            NEW_VERSION="${major}.${minor}.${next_patch}"
+            echo "Using incremented version: ${NEW_VERSION}"
+            echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          else
+            echo "No existing tag. Using version: ${BASE_VERSION}"
+            echo "version=${BASE_VERSION}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
-          tag_name: v${{ inputs.version }}
-          release_name: Release v${{ inputs.version }}
-          body: "Automated release for version ${{ inputs.version }}."
+          tag_name: v${{ steps.version_check.outputs.version }}
+          release_name: Release v${{ steps.version_check.outputs.version }}
+          body: "Automated release for version v${{ steps.version_check.outputs.version }}."
           draft: false
           prerelease: false
 
@@ -55,8 +77,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./apks/app-armeabi-v7a-release.apk
-          asset_name: app-armeabi-v7a-v${{ inputs.version }}.apk
+          asset_path: ./apks/app-armeabi-v8a-release.apk
+          asset_name: app-armeabi-v8a-v${{ steps.version_check.outputs.version }}.apk
           asset_content_type: application/vnd.android.package-archive
 
   deploy:
