@@ -181,7 +181,7 @@ jobs:
           fi
 
   build_apk:
-    name: Build APK
+    name: Build APK (and optional iOS)
     runs-on: ubuntu-latest
     needs: [dart_analyzer, run_tests]
   
@@ -203,8 +203,22 @@ jobs:
       - name: Build Android APK
         run: flutter build apk --split-per-abi
   
+      - name: Upload Android Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-apk
+          path: build/app/outputs/flutter-apk/
+  
       - name: Build iOS App
         if: ${{ inputs.build_ios }}
         run: |
           echo "Building iOS app since build_ios=true"
           flutter build ios --no-codesign
+  
+      - name: Upload iOS Build Artifacts
+        if: ${{ inputs.build_ios }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-ipa
+          path: build/ios/ipa/
+  
