@@ -127,6 +127,9 @@ jobs:
         with:
           terraform_version: "1.5.0"
 
+      - name: Verify AWS credentials
+        run: aws sts get-caller-identity
+
       - name: Authenticate to AWS
         if: ${{ inputs.enable_aws }}
         uses: aws-actions/configure-aws-credentials@v4
