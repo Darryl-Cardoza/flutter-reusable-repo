@@ -37,6 +37,11 @@ jobs:
           name: build-apk
           path: apks
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Determine Next Version
         id: version_check
         run: |
