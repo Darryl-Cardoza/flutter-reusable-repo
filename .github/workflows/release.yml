@@ -1,10 +1,9 @@
 # .github/workflows/reusable-cd.yml
-# This workflow handles the Continuous Deployment process.
-# 1. Creates a GitHub Release.
-# 2. Attaches build artifacts (APK/IPA) to the release.
-# 3. Conditionally runs Terraform to deploy/update cloud infrastructure.
+# Reusable Continuous Deployment workflow for Flutter (AWS-only version)
+# 1. Creates a GitHub Release and uploads build artifacts.
+# 2. Optionally deploys to AWS using Terraform.
 
-name: "Reusable Flutter CD"
+name: "Reusable Flutter CD (AWS Only)"
 
 on:
   workflow_call:
@@ -24,14 +23,6 @@ on:
         required: false
         type: boolean
         default: false
-      enable_gcp:
-        required: false
-        type: boolean
-        default: false
-      enable_azure:
-        required: false
-        type: boolean
-        default: false
     secrets:
       PAT_TOKEN:
         required: true
@@ -39,24 +30,11 @@ on:
         required: false
       AWS_SECRET_ACCESS_KEY:
         required: false
-      GOOGLE_CREDENTIALS:
-        required: false
-      ARM_CLIENT_ID:
-        required: false
-      ARM_CLIENT_SECRET:
-        required: false
-      ARM_SUBSCRIPTION_ID:
-        required: false
-      ARM_TENANT_ID:
-        required: false
 
 jobs:
   create_release:
     name: Create GitHub Release and Upload Artifacts
     runs-on: ubuntu-latest
-    # This job needs the PAT_TOKEN, so it must be inherited
-    secrets:
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
     steps:
       - name: Download APK Artifacts
         uses: actions/download-artifact@v4
@@ -68,7 +46,7 @@ jobs:
         id: create_release
         uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }} # This will now work
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           tag_name: v${{ inputs.version }}
           release_name: Release v${{ inputs.version }}
@@ -79,7 +57,7 @@ jobs:
       - name: Upload Release Assets
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }} # This will now work
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./apks/app-armeabi-v7a-release.apk
@@ -87,19 +65,10 @@ jobs:
           asset_content_type: application/vnd.android.package-archive
 
   deploy:
-    name: Deploy to Cloud with Terraform
-    if: ${{ inputs.deploy_to_cloud }}
+    name: Deploy to AWS with Terraform
+    if: ${{ inputs.deploy_to_cloud && inputs.enable_aws }}
     needs: create_release
     runs-on: ubuntu-latest
-    # This job needs all the cloud secrets for its steps, so they must be inherited
-    secrets:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -107,58 +76,32 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: "1.5.0" 
-
-      # --- Cloud Provider Authentication ---
-      # The workflow will only run the block for which secrets are provided.
+          terraform_version: "1.5.0"
 
       - name: Authenticate to AWS
-        # This 'if' condition will now work because the 'secrets' context is defined
-        if: ${{ inputs.enable_aws && secrets.AWS_ACCESS_KEY_ID != '' }}
+        if: ${{ inputs.enable_aws && env.AWS_ACCESS_KEY_ID != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: "us-east-1" 
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: "us-east-1"
 
-      - name: Authenticate to Google Cloud
-        # This 'if' condition will now work
-        if: ${{ inputs.enable_gcp && secrets.GOOGLE_CREDENTIALS != '' }}
-        uses: 'google-github-actions/auth@v1'
-        with:
-          credentials_json: '${{ secrets.GOOGLE_CREDENTIALS }}'
-
-      - name: Authenticate to Azure
-        # This 'if' condition will now work
-        if: ${{ inputs.enable_azure && secrets.ARM_CLIENT_ID != '' }}
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          client-secret: ${{ secrets.ARM_CLIENT_SECRET }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-       
-      # --- Run Terraform ---
       - name: Terraform Init
-        id: init
         run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
 
       - name: Terraform Plan
-        id: plan
         run: |
           terraform -chdir="${{ inputs.terraform_working_dir }}" plan -no-color \
             -var="app_version=${{ inputs.version }}" \
-            -var="enable_aws=${{ inputs.enable_aws }}" \
-            -var="enable_gcp=${{ inputs.enable_gcp }}" \
-            -var="enable_azure=${{ inputs.enable_azure }}"
+            -var="enable_aws=${{ inputs.enable_aws }}"
         continue-on-error: true
 
       - name: Terraform Apply
-        id: apply
-        if: steps.plan.outcome == 'success'
+        if: success()
         run: |
           terraform -chdir="${{ inputs.terraform_working_dir }}" apply -auto-approve \
             -var="app_version=${{ inputs.version }}" \
-            -var="enable_aws=${{ inputs.enable_aws }}" \
-            -var="enable_gcp=${{ inputs.enable_gcp }}" \
-            -var="enable_azure=${{ inputs.enable_azure }}"
+            -var="enable_aws=${{ inputs.enable_aws }}"
