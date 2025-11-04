@@ -50,27 +50,25 @@ jobs:
           echo "Checking downloaded APK files..."
           find apks -type f || echo "No APKs found!"
 
-      - name: Determine Next Version
+      - name: Determine Next Available Version
         id: version_check
         run: |
           BASE_VERSION="${{ inputs.version }}"
-          echo "Checking if tag v${BASE_VERSION} exists..."
+          echo "🔍 Starting base version: ${BASE_VERSION}"
 
-          # Fetch all tags
           git fetch --tags
+          CURRENT_VERSION="${BASE_VERSION}"
 
-          # If tag already exists, increment patch version automatically
-          if git rev-parse "v${BASE_VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${BASE_VERSION} already exists. Calculating next version..."
-            IFS='.' read -r major minor patch <<<"${BASE_VERSION}"
-            next_patch=$((patch + 1))
-            NEW_VERSION="${major}.${minor}.${next_patch}"
-            echo "Using incremented version: ${NEW_VERSION}"
-            echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          else
-            echo "No existing tag. Using version: ${BASE_VERSION}"
-            echo "version=${BASE_VERSION}" >> $GITHUB_OUTPUT
-          fi
+          # Increment until we find a tag that doesn't exist
+          while git rev-parse "v${CURRENT_VERSION}" >/dev/null 2>&1; do
+            IFS='.' read -r major minor patch <<<"${CURRENT_VERSION}"
+            patch=$((patch + 1))
+            CURRENT_VERSION="${major}.${minor}.${patch}"
+            echo "Tag v${CURRENT_VERSION} already exists, trying next..."
+          done
+
+          echo "Next available version: ${CURRENT_VERSION}"
+          echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         id: create_release
@@ -79,12 +77,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           tag_name: v${{ steps.version_check.outputs.version }}
-          release_name: Release v${{ steps.version_check.outputs.version }}
-          body: "Automated release for version v${{ steps.version_check.outputs.version }}."
+          release_name: "Release v${{ steps.version_check.outputs.version }}"
+          body: |
+            Automated release for version **v${{ steps.version_check.outputs.version }}**
+
+            This release was automatically generated and version-bumped.
           draft: false
           prerelease: false
 
-      - name: Upload Release Assets
+      - name: Upload Release Asset (APK)
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
