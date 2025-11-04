@@ -184,25 +184,27 @@ jobs:
     name: Build APK
     runs-on: ubuntu-latest
     needs: [dart_analyzer, run_tests]
-
+  
     steps:
       - uses: actions/checkout@v4
-
+  
       - name: Set Up Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: 17
-
+  
       - name: Setup Flutter
         uses: Rite-Technologies-23/reusable-repo-flutter/.github/actions/setup-flutter@main
         with:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
-
+  
       - name: Build Android APK
         run: flutter build apk --split-per-abi
-
-      - name: Conditionally Build iOS App
+  
+      - name: Build iOS App
         if: ${{ inputs.build_ios }}
-        run: flutter build ios --no-codesign
+        run: |
+          echo "Building iOS app since build_ios=true"
+          flutter build ios --no-codesign
