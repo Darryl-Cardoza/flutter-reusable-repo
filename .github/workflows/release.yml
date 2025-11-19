@@ -132,7 +132,7 @@ jobs:
       - name: Read Terraform Output - Bucket Name
         id: tf_output
         run: |
-          bucket=$(terraform -chdir="${{ inputs.terraform_working_dir }}" output -raw s3_bucket_name)
+          bucket=$(terraform -chdir="${{ inputs.terraform_working_dir }}" output -raw aws_s3_bucket_name)
           echo "bucket=$bucket" >> $GITHUB_OUTPUT
 
       - name: Upload APK to S3
