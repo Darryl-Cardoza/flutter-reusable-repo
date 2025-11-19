@@ -25,6 +25,8 @@ on:
         required: true
       AWS_SECRET_ACCESS_KEY:
         required: true
+      AWS_SESSION_TOKEN:               # ⭐ Added exactly like reference workflow
+        required: true
 
 jobs:
   create_release:
@@ -45,7 +47,7 @@ jobs:
           name: build-apk
           path: apks
 
-      - name: Determine Next Available Version
+      - name: Determine Next Version
         id: version_check
         run: |
           BASE_VERSION="${{ inputs.version }}"
@@ -101,24 +103,26 @@ jobs:
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}   # ⭐ Same as reference
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (Session Based)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}    # ⭐ Included
+          aws-region: us-east-1
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: "1.5.0"
-
-      - name: Authenticate to AWS
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Verify AWS credentials
-        run: aws sts get-caller-identity
 
       - name: Terraform Init
         run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
