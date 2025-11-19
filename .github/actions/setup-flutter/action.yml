@@ -26,6 +26,6 @@ runs:
       shell: bash
       run: |
         mkdir -p .github/tool
-        curl -sSL https://raw.githubusercontent.com/Rite-Technologies-23/reusable-repo-flutter/main/.github/tool/analyzer_to_html.dart -o .github/tool/analyzer_to_html.dart
-        curl -sSL https://raw.githubusercontent.com/Rite-Technologies-23/reusable-repo-flutter/main/.github/tool/json_to_junit.dart -o .github/tool/json_to_junit.dart
-        curl -sSL https://raw.githubusercontent.com/Rite-Technologies-23/reusable-repo-flutter/main/.github/tool/run_filtered_tests.dart -o .github/tool/run_filtered_tests.dart
+        curl -sSL https://raw.githubusercontent.com/Darryl-Cardoza/flutter-reusable-repo/main/.github/tool/analyzer_to_html.dart -o .github/tool/analyzer_to_html.dart
+        curl -sSL https://raw.githubusercontent.com/Darryl-Cardoza/flutter-reusable-repo/main/.github/tool/json_to_junit.dart -o .github/tool/json_to_junit.dart
+        curl -sSL https://raw.githubusercontent.com/Darryl-Cardoza/flutter-reusable-repo/main/.github/tool/run_filtered_tests.dart -o .github/tool/run_filtered_tests.dart
