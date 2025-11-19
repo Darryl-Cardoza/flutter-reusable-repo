@@ -25,7 +25,7 @@ on:
         required: true
       AWS_SECRET_ACCESS_KEY:
         required: true
-      AWS_SESSION_TOKEN:               # ⭐ Added exactly like reference workflow
+      AWS_SESSION_TOKEN:
         required: true
 
 jobs:
@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version_check.outputs.version }}
+      apk_path: ${{ steps.find_apk.outputs.apk_path }}
 
     steps:
       - name: Checkout Repository
@@ -59,7 +60,6 @@ jobs:
             patch=$((patch + 1))
             CURRENT_VERSION="${major}.${minor}.${patch}"
           done
-
           echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -79,13 +79,9 @@ jobs:
         id: find_apk
         run: |
           apk_path=$(find apks -type f -name "*arm64-v8a-release.apk" | head -n 1)
-          if [ -z "$apk_path" ]; then
-            echo "❌ No APK found!"
-            exit 1
-          fi
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
 
-      - name: Upload Release Asset
+      - name: Upload Release Asset to GitHub Release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -96,14 +92,14 @@ jobs:
           asset_content_type: application/vnd.android.package-archive
 
   deploy:
-    name: Deploy to AWS with Terraform
+    name: Deploy to AWS with Terraform & Upload APK to S3
     if: ${{ inputs.deploy_to_cloud && inputs.enable_aws }}
     needs: create_release
     runs-on: ubuntu-latest
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}   # ⭐ Same as reference
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +109,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}    # ⭐ Included
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
       - name: Verify AWS Identity
@@ -127,15 +123,20 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
 
-      - name: Terraform Plan
-        run: |
-          terraform -chdir="${{ inputs.terraform_working_dir }}" plan \
-            -var="app_version=${{ needs.create_release.outputs.version }}" \
-            -var="enable_aws=${{ inputs.enable_aws }}"
-
       - name: Terraform Apply
-        if: ${{ success() }}
         run: |
           terraform -chdir="${{ inputs.terraform_working_dir }}" apply -auto-approve \
             -var="app_version=${{ needs.create_release.outputs.version }}" \
             -var="enable_aws=${{ inputs.enable_aws }}"
+
+      - name: Read Terraform Output - Bucket Name
+        id: tf_output
+        run: |
+          bucket=$(terraform -chdir="${{ inputs.terraform_working_dir }}" output -raw s3_bucket_name)
+          echo "bucket=$bucket" >> $GITHUB_OUTPUT
+
+      - name: Upload APK to S3
+        run: |
+          echo "Uploading APK to S3 bucket: ${{ steps.tf_output.outputs.bucket }}"
+          aws s3 cp "${{ needs.create_release.outputs.apk_path }}" \
+            "s3://${{ steps.tf_output.outputs.bucket }}/releases/app-arm64-v8a-v${{ needs.create_release.outputs.version }}.apk"
