@@ -130,13 +130,12 @@ jobs:
             -var="enable_aws=${{ inputs.enable_aws }}"
 
       - name: Read Terraform Output - Bucket Name
-        id: tf_output
         run: |
           bucket=$(terraform -chdir="${{ inputs.terraform_working_dir }}" output -raw aws_s3_bucket_name)
-          echo "bucket=$bucket" >> $GITHUB_OUTPUT
+          echo "BUCKET_NAME=$bucket" >> $GITHUB_ENV
 
       - name: Upload APK to S3
         run: |
-          echo "Uploading APK to S3 bucket: ${{ steps.tf_output.outputs.bucket }}"
+          echo "Uploading APK to S3 bucket: $BUCKET_NAME"
           aws s3 cp "${{ needs.create_release.outputs.apk_path }}" \
-            "s3://${{ steps.tf_output.outputs.bucket }}/releases/app-arm64-v8a-v${{ needs.create_release.outputs.version }}.apk"
+            "s3://$BUCKET_NAME/releases/app-arm64-v8a-v${{ needs.create_release.outputs.version }}.apk"
