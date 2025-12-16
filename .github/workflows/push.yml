@@ -162,7 +162,7 @@ jobs:
       - name: Decode Android Keystore
         if: steps.keystore_check.outputs.has_keystore == 'true'
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > android/upload-keystore.jks
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > android/app/upload-keystore.jks
 
       - name: Create key.properties
         if: steps.keystore_check.outputs.has_keystore == 'true'
