@@ -1,4 +1,4 @@
-name: "Reusable Flutter CD (AWS Only)"
+name: "Reusable Flutter CD"
 
 on:
   workflow_call:
@@ -6,62 +6,66 @@ on:
       version:
         required: true
         type: string
+
       deploy_to_cloud:
         required: false
         type: boolean
         default: false
-      terraform_working_dir:
-        required: false
-        type: string
-        default: './terraform'
+
       enable_aws:
         required: false
         type: boolean
         default: false
+
+      terraform_working_dir:
+        required: false
+        type: string
+        default: './terraform'
+
       deploy_to_playstore:
         required: false
         type: boolean
         default: false
+
       playstore_track:
         required: false
         type: string
         default: internal
+
       package_name:
         required: true
         type: string
-        default: com.example.app
+
     secrets:
-      PAT_TOKEN:
-        required: true
       AWS_ACCESS_KEY_ID:
-        required: true
+        required: false
       AWS_SECRET_ACCESS_KEY:
-        required: true
+        required: false
       AWS_SESSION_TOKEN:
-        required: true
+        required: false
       PLAYSTORE_SERVICE_ACCOUNT:
         required: false
 
-
 jobs:
+  # ---------------------------------------------------------------------------
+  # CREATE GITHUB RELEASE
+  # ---------------------------------------------------------------------------
   create_release:
-    name: Create GitHub Release and Upload Artifacts
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version_check.outputs.version }}
-      apk_path: ${{ steps.find_apk.outputs.apk_path }}
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download APK Artifacts
+      - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: build-apk
-          path: apks
+          name: build-output
+          path: release
 
       - name: Determine Next Version
         id: version_check
@@ -75,87 +79,59 @@ jobs:
             patch=$((patch + 1))
             CURRENT_VERSION="${major}.${minor}.${patch}"
           done
+
           echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version_check.outputs.version }}
-          release_name: "Release v${{ steps.version_check.outputs.version }}"
-          body: |
-            Automated release for version **v${{ steps.version_check.outputs.version }}**
-          draft: false
-          prerelease: false
+          name: Release v${{ steps.version_check.outputs.version }}
+          generate_release_notes: true
 
-      - name: Find APK file dynamically
-        id: find_apk
+      - name: Upload APK to GitHub Release (if exists)
         run: |
-          apk_path=$(find apks -type f -name "*arm64-v8a-release.apk" | head -n 1)
-          echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
-
-      - name: Upload Release Asset to GitHub Release
-        uses: actions/upload-release-asset@v1
+          apk=$(find release -name "*.apk" | head -n 1)
+          if [ -n "$apk" ]; then
+            gh release upload \
+              v${{ steps.version_check.outputs.version }} \
+              "$apk" \
+              --clobber
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.find_apk.outputs.apk_path }}
-          asset_name: app-arm64-v8a-v${{ steps.version_check.outputs.version }}.apk
-          asset_content_type: application/vnd.android.package-archive
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  deploy:
-    name: Deploy to AWS with Terraform & Upload APK to S3
+  # ---------------------------------------------------------------------------
+  # DEPLOY TO AWS (OPTIONAL)
+  # ---------------------------------------------------------------------------
+  deploy_aws:
     if: ${{ inputs.deploy_to_cloud && inputs.enable_aws }}
     needs: create_release
     runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials (Session Based)
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      - name: Verify AWS Identity
-        run: aws sts get-caller-identity
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+      - uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: "1.5.0"
 
-      - name: Terraform Init
-        run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
+      - run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
 
-      - name: Terraform Apply
-        run: |
+      - run: |
           terraform -chdir="${{ inputs.terraform_working_dir }}" apply -auto-approve \
-            -var="app_version=${{ needs.create_release.outputs.version }}" \
-            -var="enable_aws=${{ inputs.enable_aws }}"
+            -var="app_version=${{ needs.create_release.outputs.version }}"
 
-      - name: Read Terraform Output - Bucket Name
-        run: |
-          bucket=$(terraform -chdir="${{ inputs.terraform_working_dir }}" output -raw aws_s3_bucket_name)
-          echo "BUCKET_NAME=$bucket" >> $GITHUB_ENV
-
-      - name: Upload APK to S3
-        run: |
-          echo "Uploading APK to S3 bucket: $BUCKET_NAME"
-          aws s3 cp "${{ needs.create_release.outputs.apk_path }}" \
-            "s3://$BUCKET_NAME/releases/app-arm64-v8a-v${{ needs.create_release.outputs.version }}.apk"
-
-
+  # ---------------------------------------------------------------------------
+  # DEPLOY TO PLAY STORE (SAFE & CONDITIONAL)
+  # ---------------------------------------------------------------------------
   deploy_playstore:
     name: Deploy to Google Play Store
     if: ${{ inputs.deploy_to_playstore }}
@@ -163,23 +139,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download APK/AAB
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: build-apk
+          name: build-output
           path: release
 
-      - name: Find Release File
-        id: find_bundle
+      - name: Find AAB (skip if not found)
+        id: bundle
         run: |
-          file=$(find release -type f \( -name "*.aab" -o -name "*.apk" \) | head -n 1)
-          echo "bundle=$file" >> $GITHUB_OUTPUT
+          bundle=$(find release -name "*.aab" | head -n 1)
 
-      - name: Upload to Play Store
+          if [ -z "$bundle" ]; then
+            echo "⚠️ No AAB found. Skipping Play Store deployment."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "bundle=$bundle" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Upload to Google Play Store
+        if: steps.bundle.outputs.skip == 'false'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
           packageName: ${{ inputs.package_name }}
-          releaseFiles: ${{ steps.find_bundle.outputs.bundle }}
+          releaseFiles: ${{ steps.bundle.outputs.bundle }}
           track: ${{ inputs.playstore_track }}
           status: completed
