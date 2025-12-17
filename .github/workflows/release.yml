@@ -166,4 +166,4 @@ jobs:
           packageName: ${{ inputs.package_name }}
           releaseFiles: ${{ steps.bundle.outputs.bundle }}
           track: ${{ inputs.playstore_track }}
-          status: completed
+          status: draft
