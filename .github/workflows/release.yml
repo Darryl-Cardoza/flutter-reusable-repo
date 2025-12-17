@@ -32,6 +32,10 @@ on:
         type: string
         default: internal
 
+      playstore_status:
+        required: false
+        type: string
+
       package_name:
         required: true
         type: string
