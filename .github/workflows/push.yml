@@ -148,7 +148,7 @@ jobs:
   build_android:
     name: Build Android (Debug / Release)
     runs-on: ubuntu-latest
-    needs: [dart_analyzer, run_tests, fetch_playstore_version]
+    needs: [dart_analyzer, run_tests]
 
     steps:
       - uses: actions/checkout@v4
