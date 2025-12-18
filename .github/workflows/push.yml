@@ -23,11 +23,26 @@ on:
         type: boolean
         default: false
 
+      # 🔥 Play Store inputs
+      package_name:
+        required: true
+        type: string
+
+      version_name:
+        required: true
+        type: string
+
+      playstore_track:
+        required: false
+        type: string
+        default: internal
+
     secrets:
       SONAR_TOKEN:
         required: false
       CODACY_PROJECT_TOKEN:
         required: false
+
       ANDROID_KEYSTORE:
         required: false
       KEYSTORE_PASSWORD:
@@ -36,6 +51,14 @@ on:
         required: false
       KEY_ALIAS:
         required: false
+
+      PLAYSTORE_SERVICE_ACCOUNT:
+        required: false
+
+# 🔒 Prevent parallel versionCode collisions
+concurrency:
+  group: playstore-${{ inputs.package_name }}
+  cancel-in-progress: false
 
 env:
   FLUTTER_VERSION: ${{ inputs.flutter_version }}
@@ -120,12 +143,47 @@ jobs:
         run: flutter test --coverage || true
 
   # ---------------------------------------------------------------------------
-  # ANDROID BUILD (DEBUG OR RELEASE)
+  # FETCH PLAY STORE VERSION CODE
+  # ---------------------------------------------------------------------------
+  fetch_playstore_version:
+    name: Fetch Play Store VersionCode
+    runs-on: ubuntu-latest
+
+    outputs:
+      version_code: ${{ steps.calc.outputs.version_code }}
+
+    steps:
+      - name: Read Play Store versionCodes
+        id: playstore
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
+          packageName: ${{ inputs.package_name }}
+          track: ${{ inputs.playstore_track }}
+          skipUpload: true
+
+      - name: Compute next versionCode
+        id: calc
+        run: |
+          EXISTING="${{ steps.playstore.outputs.versionCodes }}"
+
+          if [ -z "$EXISTING" ]; then
+            NEXT=1
+          else
+            MAX=$(echo "$EXISTING" | tr ',' '\n' | sort -n | tail -1)
+            NEXT=$((MAX + 1))
+          fi
+
+          echo "version_code=$NEXT" >> $GITHUB_OUTPUT
+          echo "✅ Using versionCode=$NEXT"
+
+  # ---------------------------------------------------------------------------
+  # ANDROID BUILD
   # ---------------------------------------------------------------------------
   build_android:
     name: Build Android (Debug / Release)
     runs-on: ubuntu-latest
-    needs: [dart_analyzer, run_tests]
+    needs: [dart_analyzer, run_tests, fetch_playstore_version]
 
     steps:
       - uses: actions/checkout@v4
@@ -176,14 +234,20 @@ jobs:
 
       - name: Build RELEASE AAB
         if: steps.keystore_check.outputs.has_keystore == 'true'
-        run: flutter build appbundle --release
+        run: |
+          flutter build appbundle --release \
+            --build-name=${{ inputs.version_name }} \
+            --build-number=${{ needs.fetch_playstore_version.outputs.version_code }}
 
       # ----------------------------
       # DEBUG BUILD (NO KEYSTORE)
       # ----------------------------
       - name: Build DEBUG APK
         if: steps.keystore_check.outputs.has_keystore == 'false'
-        run: flutter build apk --debug
+        run: |
+          flutter build apk --debug \
+            --build-name=${{ inputs.version_name }} \
+            --build-number=1
 
       # ----------------------------
       # Upload Artifacts
