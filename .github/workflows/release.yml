@@ -178,18 +178,6 @@ jobs:
           echo "skip=false" >> $GITHUB_OUTPUT
 
       # -----------------------------------------------------------------------
-      # Validate Play Store Access (Fail Fast)
-      # -----------------------------------------------------------------------
-      - name: Validate Play Store Configuration
-        if: steps.bundle.outputs.skip == 'false'
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
-          packageName: ${{ inputs.package_name }}
-          track: ${{ inputs.playstore_track }}
-          skipUpload: true
-
-      # -----------------------------------------------------------------------
       # Upload AAB + Metadata + Images
       # -----------------------------------------------------------------------
       - name: Upload to Google Play Store

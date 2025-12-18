@@ -143,41 +143,6 @@ jobs:
         run: flutter test --coverage || true
 
   # ---------------------------------------------------------------------------
-  # FETCH PLAY STORE VERSION CODE
-  # ---------------------------------------------------------------------------
-  fetch_playstore_version:
-    name: Fetch Play Store VersionCode
-    runs-on: ubuntu-latest
-
-    outputs:
-      version_code: ${{ steps.calc.outputs.version_code }}
-
-    steps:
-      - name: Read Play Store versionCodes
-        id: playstore
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
-          packageName: ${{ inputs.package_name }}
-          track: ${{ inputs.playstore_track }}
-          skipUpload: true
-
-      - name: Compute next versionCode
-        id: calc
-        run: |
-          EXISTING="${{ steps.playstore.outputs.versionCodes }}"
-
-          if [ -z "$EXISTING" ]; then
-            NEXT=1
-          else
-            MAX=$(echo "$EXISTING" | tr ',' '\n' | sort -n | tail -1)
-            NEXT=$((MAX + 1))
-          fi
-
-          echo "version_code=$NEXT" >> $GITHUB_OUTPUT
-          echo "✅ Using versionCode=$NEXT"
-
-  # ---------------------------------------------------------------------------
   # ANDROID BUILD
   # ---------------------------------------------------------------------------
   build_android:
