@@ -123,24 +123,84 @@ jobs:
           path: analyzer-report.txt
 
   # ---------------------------------------------------------------------------
-  # TESTS
+  # TESTS + COVERAGE + REPORTS (ARTIFACT-ONLY)
   # ---------------------------------------------------------------------------
   run_tests:
-    name: Run Flutter Tests
+    name: Run Flutter Tests & Coverage
     runs-on: ubuntu-latest
     needs: build_flutter_project
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      # -------------------------------------------------------
+      # Setup Flutter + Dart Utilities
+      # -------------------------------------------------------
+      - name: Setup Flutter and Dart Utilities
         uses: Darryl-Cardoza/flutter-reusable-repo/.github/actions/setup-flutter@main
         with:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      - name: Run Tests
-        run: flutter test --coverage || true
+      # -------------------------------------------------------
+      # Run Tests (machine output → temp file)
+      # -------------------------------------------------------
+      - name: Run Flutter Tests
+        run: |
+          mkdir -p /tmp/test-results /tmp/coverage
+          
+          flutter test \
+            --coverage \
+            --machine \
+            > /tmp/test-results/test-output.json || true
+
+      # -------------------------------------------------------
+      # Convert JSON → JUnit (temp)
+      # -------------------------------------------------------
+      - name: Generate JUnit Report
+        run: |
+          dart .github/tool/json_to_junit.dart \
+            /tmp/test-results/test-output.json \
+            /tmp/test-results/junit.xml
+
+      # -------------------------------------------------------
+      # Generate Coverage HTML (temp)
+      # -------------------------------------------------------
+      - name: Generate Coverage HTML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lcov
+          genhtml coverage/lcov.info --output-directory /tmp/coverage/html
+
+      # -------------------------------------------------------
+      # Enforce Coverage Threshold
+      # -------------------------------------------------------
+      - name: Enforce Coverage Threshold
+        run: |
+          COVERAGE=$(lcov --summary coverage/lcov.info | grep lines | awk '{print $2}' | sed 's/%//')
+          REQUIRED=${{ inputs.coverage_threshold }}
+          
+          echo "Coverage: $COVERAGE%"
+          
+          if (( $(echo "$COVERAGE < $REQUIRED" | bc -l) )); then
+            echo "Coverage below threshold ($REQUIRED%)"
+            exit 1
+          fi
+
+      # -------------------------------------------------------
+      # Upload Artifacts
+      # -------------------------------------------------------
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: /tmp/test-results
+
+      - name: Upload Coverage Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: /tmp/coverage
 
   # ---------------------------------------------------------------------------
   # ANDROID BUILD
@@ -201,8 +261,7 @@ jobs:
         if: steps.keystore_check.outputs.has_keystore == 'true'
         run: |
           flutter build appbundle --release \
-            --build-name=${{ inputs.version_name }} \
-            --build-number=${{ needs.fetch_playstore_version.outputs.version_code }}
+            --build-name=${{ inputs.version_name }} 
 
       # ----------------------------
       # DEBUG BUILD (NO KEYSTORE)
