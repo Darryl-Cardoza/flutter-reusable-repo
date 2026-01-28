@@ -60,6 +60,10 @@ on:
         type: boolean
         default: false
 
+      ios_bundle_id:
+        required: true
+        type: string
+
     secrets:
       AWS_ACCESS_KEY_ID:
         required: false
