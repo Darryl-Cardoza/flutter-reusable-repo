@@ -46,25 +46,6 @@ on:
       CODACY_PROJECT_TOKEN:
         required: false
 
-      ANDROID_KEYSTORE:
-        required: false
-      KEYSTORE_PASSWORD:
-        required: false
-      KEY_PASSWORD:
-        required: false
-      KEY_ALIAS:
-        required: false
-
-      PLAYSTORE_SERVICE_ACCOUNT:
-        required: false
-
-      IOS_CERT_P12_BASE64:
-        required: false
-      IOS_CERT_PASSWORD:
-        required: false
-      IOS_PROVISION_PROFILE_BASE64:
-        required: false
-
 # 🔒 Prevent parallel versionCode collisions
 concurrency:
   group: playstore-${{ inputs.package_name }}
@@ -213,12 +194,12 @@ jobs:
           path: /tmp/coverage
 
   # ---------------------------------------------------------------------------
-  # ANDROID BUILD
+  # ANDROID BUILD (UNSIGNED)
   # ---------------------------------------------------------------------------
   build_android:
-    name: Build Android (Debug / Release)
+    name: Build Android (UNSIGNED)
     runs-on: ubuntu-latest
-    needs: [dart_analyzer, run_tests]
+    needs: [ dart_analyzer, run_tests ]
 
     steps:
       - uses: actions/checkout@v4
@@ -235,71 +216,32 @@ jobs:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      # ----------------------------
-      # Detect Keystore
-      # ----------------------------
-      - name: Check Keystore Availability
-        id: keystore_check
-        run: |
-          if [ -z "${{ secrets.ANDROID_KEYSTORE }}" ]; then
-            echo "has_keystore=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No keystore found. Building DEBUG APK."
-          else
-            echo "has_keystore=true" >> $GITHUB_OUTPUT
-            echo "✅ Keystore found. Building RELEASE AAB."
-          fi
-
-      # ----------------------------
-      # RELEASE BUILD (SIGNED)
-      # ----------------------------
-      - name: Decode Android Keystore
-        if: steps.keystore_check.outputs.has_keystore == 'true'
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > android/upload-keystore.jks
-
-      - name: Create key.properties
-        if: steps.keystore_check.outputs.has_keystore == 'true'
-        run: |
-          cat <<EOF > android/key.properties
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=upload-keystore.jks
-          EOF
-
-      - name: Build RELEASE AAB
-        if: steps.keystore_check.outputs.has_keystore == 'true'
+      # Build unsigned AAB + APK
+      - name: Build Android AAB (release, unsigned)
         run: |
           flutter build appbundle --release \
-            --build-name=${{ inputs.version_name }} 
+            --build-name=${{ inputs.version_name }}
 
-      # ----------------------------
-      # DEBUG BUILD (NO KEYSTORE)
-      # ----------------------------
-      - name: Build DEBUG APK
-        if: steps.keystore_check.outputs.has_keystore == 'false'
+      - name: Build Android APK (release, unsigned)
         run: |
-          flutter build apk --debug \
+          flutter build apk --release \
             --build-name=${{ inputs.version_name }} \
             --build-number=1
 
-      # ----------------------------
-      # Upload Artifacts
-      # ----------------------------
-      - name: Upload Android Build Output
+      - name: Upload Android Unsigned Outputs
         uses: actions/upload-artifact@v4
         with:
-          name: build-output
+          name: android-unsigned
           path: |
             build/app/outputs/bundle/release/*.aab
-            build/app/outputs/flutter-apk/app-debug.apk
-          
+            build/app/outputs/flutter-apk/app-release.apk
+  
 
   # ---------------------------------------------------------------------------
-  # iOS BUILD (Debug / Release)
+  # iOS BUILD (UNSIGNED ARCHIVE ONLY)
   # ---------------------------------------------------------------------------
   build_ios:
-    name: Build iOS (Debug / Release)
+    name: Build iOS (UNSIGNED Archive)
     runs-on: macos-latest
     needs: [ dart_analyzer, run_tests ]
     if: ${{ inputs.build_ios }}
@@ -328,115 +270,17 @@ jobs:
           sudo gem install cocoapods -N || true
           pod --version
 
-      - name: Generate iOS Flutter config
-        run: |
-          flutter --version
-          flutter pub get
-          flutter precache --ios
-          flutter build ios --debug --no-codesign || true
-
       - name: Pod Install
         run: |
           cd ios
           pod install --repo-update
           cd ..
 
-      # -----------------------------------------------------------------------
-      # Remove any hard-coded profile/codesign constraints from pbxproj
-      # -----------------------------------------------------------------------
-      - name: Remove hardcoded provisioning profile specifier (CI fix)
-        run: |
-          set -e
-          PBXPROJ="ios/Runner.xcodeproj/project.pbxproj"
-          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER/d' "$PBXPROJ" || true
-          sed -i '' '/PROVISIONING_PROFILE =/d' "$PBXPROJ" || true
-          sed -i '' 's/CODE_SIGN_STYLE = Manual;/CODE_SIGN_STYLE = Automatic;/g' "$PBXPROJ" || true
-
-      # -----------------------------------------------------------------------
-      # Detect iOS signing assets (Distribution cert + App Store profile)
-      # -----------------------------------------------------------------------
-      - name: Check iOS Signing Availability
-        id: ios_signing_check
-        run: |
-          if [ -z "${{ secrets.IOS_CERT_P12_BASE64 }}" ] || \
-             [ -z "${{ secrets.IOS_CERT_PASSWORD }}" ] || \
-             [ -z "${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}" ]; then
-            echo "has_signing=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No iOS signing assets found. Building DEBUG (no codesign)."
-          else
-            echo "has_signing=true" >> $GITHUB_OUTPUT
-            echo "✅ iOS signing assets found. Will archive (no codesign) and export IPA (distribution)."
-          fi
-
-      # -----------------------------------------------------------------------
-      # Install Distribution certificate + provisioning profile
-      # -----------------------------------------------------------------------
-      - name: Install iOS Certificate + Profile
-        if: steps.ios_signing_check.outputs.has_signing == 'true'
-        env:
-          P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
-          P12_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
-          PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
-          IOS_BUNDLE_ID: ${{ inputs.ios_bundle_id }}
-        run: |
-          set -e
-
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          KEYCHAIN_PASSWORD="temp_pw"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-          security default-keychain -s "$KEYCHAIN_PATH"
-
-          # Import certificate (.p12)
-          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" \
-            -k "$KEYCHAIN_PATH" \
-            -P "$P12_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-
-          # Allow codesign to access key without UI prompt
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          echo "=== Code signing identities ==="
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
-
-          # Install provisioning profile using UUID filename
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
-          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
-
-          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
-          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
-          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
-
-          echo "✅ Installed provisioning profile: $NAME ($UUID)"
-
-          # Validate profile matches expected bundle id
-          APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
-          PROFILE_BUNDLE="${APP_ID#*.}"
-
-          echo "Expected iOS bundle id: ${IOS_BUNDLE_ID}"
-          echo "Profile bundle id:      ${PROFILE_BUNDLE}"
-
-          if [ "${PROFILE_BUNDLE}" != "${IOS_BUNDLE_ID}" ]; then
-            echo "❌ Provisioning profile bundle id does not match inputs.ios_bundle_id"
-            exit 1
-          fi
-
-      # -----------------------------------------------------------------------
-      # ✅ Archive with NO signing (prevents "needs iOS App Development profile")
-      # -----------------------------------------------------------------------
+      # Build archive without signing
       - name: Build iOS Archive (no codesign)
-        if: steps.ios_signing_check.outputs.has_signing == 'true'
         run: |
           set -e
-          flutter pub get
           flutter build ios --release --no-codesign
-
           cd ios
           xcodebuild -workspace Runner.xcworkspace \
             -scheme Runner \
@@ -447,56 +291,9 @@ jobs:
             archive
           cd ..
 
-          ls -la "$RUNNER_TEMP/Runner.xcarchive" || true
-
-      # -----------------------------------------------------------------------
-      # ✅ Export IPA (distribution) using ExportOptions.plist
-      # Requires ios/ExportOptions.plist committed in repo
-      # -----------------------------------------------------------------------
-      - name: Export IPA (distribution)
-        if: steps.ios_signing_check.outputs.has_signing == 'true'
-        run: |
-          set -e
-          if [ ! -f "ios/ExportOptions.plist" ]; then
-            echo "❌ Missing ios/ExportOptions.plist. Add it to the repo."
-            exit 1
-          fi
-
-          cd ios
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist ExportOptions.plist
-          cd ..
-
-          echo "=== Export output ==="
-          ls -la "$RUNNER_TEMP/export" || true
-
-          ipa=$(find "$RUNNER_TEMP/export" -name "*.ipa" | head -n 1)
-          if [ -z "$ipa" ]; then
-            echo "❌ No IPA produced during export."
-            exit 1
-          fi
-          echo "✅ IPA: $ipa"
-
-      # -----------------------------------------------------------------------
-      # DEBUG BUILD (no signing)
-      # -----------------------------------------------------------------------
-      - name: Build DEBUG iOS (no codesign)
-        if: steps.ios_signing_check.outputs.has_signing == 'false'
-        run: |
-          flutter build ios --debug --no-codesign
-
-      # -----------------------------------------------------------------------
-      # Upload Artifacts
-      # - Always upload .app (useful for debugging)
-      # - Upload IPA only when export succeeded
-      # -----------------------------------------------------------------------
-      - name: Upload iOS Build Output
+      - name: Upload iOS Unsigned Archive
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-output
+          name: ios-archive-unsigned
           path: |
-            ${{ runner.temp }}/export/*.ipa
-            build/ios/iphoneos/*.app
-            build/ios/iphoneos/Runner.app
+            ${{ runner.temp }}/Runner.xcarchive

@@ -65,16 +65,35 @@ on:
         default: ''
 
     secrets:
-      AWS_ACCESS_KEY_ID:
-        required: false
-      AWS_SECRET_ACCESS_KEY:
-        required: false
-      AWS_SESSION_TOKEN:
-        required: false
+#      # ---------------- AWS ----------------
+#      AWS_ACCESS_KEY_ID:
+#        required: false
+#      AWS_SECRET_ACCESS_KEY:
+#        required: false
+#      AWS_SESSION_TOKEN:
+#        required: false
 
+      # ---------------- Android signing ----------------
+      ANDROID_KEYSTORE:
+        required: false
+      KEYSTORE_PASSWORD:
+        required: false
+      KEY_PASSWORD:
+        required: false
+      KEY_ALIAS:
+        required: false
       PLAYSTORE_SERVICE_ACCOUNT:
         required: false
 
+      # ---------------- iOS signing ----------------
+      IOS_CERT_P12_BASE64:
+        required: false
+      IOS_CERT_PASSWORD:
+        required: false
+      IOS_PROVISION_PROFILE_BASE64:
+        required: false
+
+      # ---------------- App Store Connect ----------------
       APPSTORE_ISSUER_ID:
         required: false
       APPSTORE_KEY_ID:
@@ -97,42 +116,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download Android Build Artifacts
+      - name: Download unsigned Android artifacts
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: build-output
+          name: android-unsigned
           path: release/android
 
-      - name: Download iOS Build Artifacts
+      - name: Download unsigned iOS archive
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: ios-build-output
+          name: ios-archive-unsigned
           path: release/ios
 
-      - name: List downloaded artifacts
-        run: |
-          echo "=== Android ==="
-          ls -R release/android || true
-          echo "=== iOS ==="
-          ls -R release/ios || true
-
-      - name: Determine Next GitHub Version
+      - name: Determine next GitHub version
         id: version_check
         run: |
           BASE_VERSION="${{ inputs.version }}"
           git fetch --tags
-          CURRENT_VERSION="${BASE_VERSION}"
+          CURRENT_VERSION="$BASE_VERSION"
 
-          while git rev-parse "v${CURRENT_VERSION}" >/dev/null 2>&1; do
-            IFS='.' read -r major minor patch <<<"${CURRENT_VERSION}"
+          while git rev-parse "v$CURRENT_VERSION" >/dev/null 2>&1; do
+            IFS='.' read -r major minor patch <<<"$CURRENT_VERSION"
             patch=$((patch + 1))
-            CURRENT_VERSION="${major}.${minor}.${patch}"
+            CURRENT_VERSION="$major.$minor.$patch"
           done
 
-          echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-          echo "✅ GitHub Release Version: ${CURRENT_VERSION}"
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -143,75 +154,53 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload APK to GitHub Release (if exists)
-        run: |
-          apk=$(find release -name "*.apk" | head -n 1)
-          if [ -n "$apk" ]; then
-            gh release upload \
-              v${{ steps.version_check.outputs.version }} \
-              "$apk" \
-              --clobber
-          else
-            echo "No APK found. Skipping."
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload AAB to GitHub Release (if exists)
-        run: |
-          aab=$(find release -name "*.aab" | head -n 1)
-          if [ -n "$aab" ]; then
-            gh release upload \
-              v${{ steps.version_check.outputs.version }} \
-              "$aab" \
-              --clobber
-          else
-            echo "No AAB found. Skipping."
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload IPA to GitHub Release (if exists)
-        run: |
-          ipa=$(find release -name "*.ipa" | head -n 1)
-          if [ -n "$ipa" ]; then
-            gh release upload \
-              v${{ steps.version_check.outputs.version }} \
-              "$ipa" \
-              --clobber
-          else
-            echo "No IPA found. Skipping."
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   # ---------------------------------------------------------------------------
-  # DEPLOY TO AWS (OPTIONAL)
+  # SIGN ANDROID (POST-BUILD SIGNING)
   # ---------------------------------------------------------------------------
-  deploy_aws:
-    if: ${{ inputs.deploy_to_cloud && inputs.enable_aws }}
+  sign_android:
+    name: Sign Android
+    if: ${{ inputs.deploy_to_playstore }}
     needs: create_release
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Download unsigned Android artifacts
+        uses: actions/download-artifact@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          name: android-unsigned
+          path: release/android
 
-      - uses: hashicorp/setup-terraform@v2
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          terraform_version: "1.5.0"
+          distribution: 'temurin'
+          java-version: 17
 
-      - run: terraform -chdir="${{ inputs.terraform_working_dir }}" init
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > /tmp/upload-keystore.jks
 
-      - run: |
-          terraform -chdir="${{ inputs.terraform_working_dir }}" apply -auto-approve \
-            -var="app_version=${{ needs.create_release.outputs.version }}"
+      - name: Sign APK
+        run: |
+          set -e
+          APK=$(find release/android -name "*release*.apk" | head -n 1)
+          zipalign -f 4 "$APK" /tmp/aligned.apk
+
+          apksigner sign \
+            --ks /tmp/upload-keystore.jks \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --out release/android/app-release-signed.apk \
+            /tmp/aligned.apk
+
+      - name: Upload signed Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-signed
+          path: |
+            release/android/app-release-signed.apk
+            release/android/*.aab
 
   # ---------------------------------------------------------------------------
   # DEPLOY TO PLAY STORE
@@ -219,127 +208,112 @@ jobs:
   deploy_playstore:
     name: Deploy to Google Play Store
     if: ${{ inputs.deploy_to_playstore }}
-    needs: create_release
+    needs: sign_android
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download Android Build Artifacts
+      - name: Download signed Android artifacts
         uses: actions/download-artifact@v4
         with:
-          name: build-output
+          name: android-signed
           path: release/android
 
-      - name: Find AAB (skip if not found)
+      - name: Find AAB
         id: bundle
         run: |
           bundle=$(find release/android -name "*.aab" | head -n 1)
-
-          if [ -z "$bundle" ]; then
-            echo "⚠️ No AAB found. Skipping Play Store deployment."
-            echo "skip=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
           echo "bundle=$bundle" >> $GITHUB_OUTPUT
-          echo "skip=false" >> $GITHUB_OUTPUT
 
       - name: Upload to Google Play Store
-        if: steps.bundle.outputs.skip == 'false'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
           packageName: ${{ inputs.package_name }}
           releaseFiles: ${{ steps.bundle.outputs.bundle }}
-
           track: ${{ inputs.playstore_track }}
           status: ${{ inputs.playstore_status }}
-
           metadataPath: ${{ inputs.playstore_metadata_path }}
           imagesPath: ${{ inputs.playstore_images_path }}
 
-          inAppUpdatePriority: 2
-
   # ---------------------------------------------------------------------------
-  # DEPLOY TO APP STORE (TESTFLIGHT)
+  # SIGN iOS (EXPORT IPA FROM ARCHIVE)
   # ---------------------------------------------------------------------------
-  deploy_testflight:
-    name: Deploy to TestFlight
+  sign_ios:
+    name: Sign iOS & Export IPA
     if: ${{ inputs.deploy_to_testflight }}
     needs: create_release
     runs-on: macos-latest
 
     steps:
-      - name: Validate iOS bundle id input
-        run: |
-          if [ -z "${{ inputs.ios_bundle_id }}" ]; then
-            echo "❌ inputs.ios_bundle_id is required when deploy_to_testflight=true"
-            exit 1
-          fi
+      - uses: actions/checkout@v4
 
-      - name: Download iOS Build Artifacts
+      - name: Download unsigned iOS archive
         uses: actions/download-artifact@v4
         with:
-          name: ios-build-output
+          name: ios-archive-unsigned
           path: release/ios
 
-      - name: List iOS artifact contents
+      - name: Install certificate & profile
+        env:
+          P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         run: |
-          echo "=== release/ios tree ==="
-          ls -R release/ios || true
+          set -e
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p temp "$KEYCHAIN"
+          security unlock-keychain -p temp "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
 
-      - name: Find IPA (skip if not found)
-        id: ipa
+          echo "$P12_BASE64" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k temp "$KEYCHAIN"
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i profile.mobileprovision)")
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+
+      - name: Export IPA
         run: |
-          ipa=$(find release/ios -name "*.ipa" | head -n 1)
-          if [ -z "$ipa" ]; then
-            echo "⚠️ No IPA found. Skipping TestFlight deployment."
-            echo "skip=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "ipa=$ipa" >> $GITHUB_OUTPUT
-          echo "skip=false" >> $GITHUB_OUTPUT
+          ARCHIVE=$(find release/ios -name "*.xcarchive" | head -n 1)
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ios/ExportOptions.plist
+
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-signed
+          path: ${{ runner.temp }}/export/*.ipa
+
+  # ---------------------------------------------------------------------------
+  # DEPLOY TO TESTFLIGHT
+  # ---------------------------------------------------------------------------
+  deploy_testflight:
+    name: Deploy to TestFlight
+    if: ${{ inputs.deploy_to_testflight }}
+    needs: sign_ios
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download signed IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa-signed
+          path: release/ios
 
       - name: Install fastlane
-        if: steps.ipa.outputs.skip == 'false'
-        run: |
-          sudo gem install fastlane -N
+        run: sudo gem install fastlane -N
 
-      - name: Upload to TestFlight (fastlane)
-        if: steps.ipa.outputs.skip == 'false'
+      - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-          IOS_BUNDLE_ID: ${{ inputs.ios_bundle_id }}
-          IPA_PATH: ${{ steps.ipa.outputs.ipa }}
         run: |
-          set -e
-          mkdir -p ios/fastlane
-
-          # Minimal Appfile (API key auth doesn't need apple_id)
-          cat > ios/fastlane/Appfile <<EOF
-          team_id("8H4QNV2FVL")
-          EOF
-
-          cat > ios/fastlane/Fastfile <<'EOF'
-          default_platform(:ios)
-
-          platform :ios do
-            lane :upload do
-              api_key = app_store_connect_api_key(
-                key_id: ENV["APPSTORE_KEY_ID"],
-                issuer_id: ENV["APPSTORE_ISSUER_ID"],
-                key_content: ENV["APPSTORE_PRIVATE_KEY"],
-                is_key_content_base64: false
-              )
-
-              upload_to_testflight(
-                api_key: api_key,
-                ipa: ENV["IPA_PATH"],
-                skip_waiting_for_build_processing: true
-              )
-            end
-          end
-          EOF
-
-          fastlane ios upload
+          IPA=$(find release/ios -name "*.ipa" | head -n 1)
+          fastlane run upload_to_testflight ipa:"$IPA"
