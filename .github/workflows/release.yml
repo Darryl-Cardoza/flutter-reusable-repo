@@ -208,32 +208,57 @@ jobs:
   deploy_playstore:
     name: Deploy to Google Play Store
     if: ${{ inputs.deploy_to_playstore }}
-    needs: sign_android
+    needs: create_release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download signed Android artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: android-signed
-          path: release/android
+      - uses: actions/checkout@v4
 
-      - name: Find AAB
-        id: bundle
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Flutter
+        uses: Darryl-Cardoza/flutter-reusable-repo/.github/actions/setup-flutter@main
+        with:
+          flutter_version: 3.32.0
+          flutter_channel: stable
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Decode Android Keystore
         run: |
-          bundle=$(find release/android -name "*.aab" | head -n 1)
-          echo "bundle=$bundle" >> $GITHUB_OUTPUT
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > android/upload-keystore.jks
+
+      - name: Create key.properties
+        run: |
+          cat <<EOF > android/key.properties
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=upload-keystore.jks
+          EOF
+
+      - name: Build RELEASE AAB (signed)
+        run: |
+          flutter build appbundle --release \
+            --build-name=${{ inputs.version }} \
+            --build-number=1
 
       - name: Upload to Google Play Store
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
           packageName: ${{ inputs.package_name }}
-          releaseFiles: ${{ steps.bundle.outputs.bundle }}
+          releaseFiles: build/app/outputs/bundle/release/*.aab
           track: ${{ inputs.playstore_track }}
           status: ${{ inputs.playstore_status }}
           metadataPath: ${{ inputs.playstore_metadata_path }}
           imagesPath: ${{ inputs.playstore_images_path }}
+          inAppUpdatePriority: 2
 
   # ---------------------------------------------------------------------------
   # SIGN iOS (EXPORT IPA FROM ARCHIVE)

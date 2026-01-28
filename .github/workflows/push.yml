@@ -197,7 +197,7 @@ jobs:
   # ANDROID BUILD (UNSIGNED)
   # ---------------------------------------------------------------------------
   build_android:
-    name: Build Android (UNSIGNED)
+    name: Build Android (DEBUG only - no keystore)
     runs-on: ubuntu-latest
     needs: [ dart_analyzer, run_tests ]
 
@@ -207,7 +207,7 @@ jobs:
       - name: Set Up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: 17
 
       - name: Setup Flutter
@@ -216,26 +216,30 @@ jobs:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      # Build unsigned AAB + APK
-      - name: Build Android AAB (release, unsigned)
-        run: |
-          flutter build appbundle --release \
-            --build-name=${{ inputs.version_name }}
+      - name: Flutter Pub Get
+        run: flutter pub get
 
-      - name: Build Android APK (release, unsigned)
+      # ✅ Debug artifacts do not need your release keystore
+      - name: Build DEBUG APK
         run: |
-          flutter build apk --release \
+          flutter build apk --debug \
             --build-name=${{ inputs.version_name }} \
             --build-number=1
 
-      - name: Upload Android Unsigned Outputs
+      - name: Build DEBUG AAB
+        run: |
+          flutter build appbundle --debug \
+            --build-name=${{ inputs.version_name }} \
+            --build-number=1
+
+      - name: Upload Android Debug Outputs
         uses: actions/upload-artifact@v4
         with:
-          name: android-unsigned
+          name: android-ci-output
           path: |
-            build/app/outputs/bundle/release/*.aab
-            build/app/outputs/flutter-apk/app-release.apk
-  
+            build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/bundle/debug/*.aab
+
 
   # ---------------------------------------------------------------------------
   # iOS BUILD (UNSIGNED ARCHIVE ONLY)
@@ -300,6 +304,5 @@ jobs:
       - name: Upload iOS Unsigned Archive
         uses: actions/upload-artifact@v4
         with:
-          name: ios-archive-unsigned
-          path: |
-            ${{ runner.temp }}/Runner.xcarchive
+          name: ios-ci-archive
+          path: ${{ runner.temp }}/Runner.xcarchive
