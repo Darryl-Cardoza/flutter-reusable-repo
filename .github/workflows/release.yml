@@ -53,16 +53,16 @@ on:
         type: string
         default: playstore/images
 
-      # ---------------- App Store (Test Flight) ----------------
-
+      # ---------------- App Store (TestFlight) ----------------
       deploy_to_testflight:
         required: false
         type: boolean
         default: false
 
       ios_bundle_id:
-        required: true
+        required: false
         type: string
+        default: ''
 
     secrets:
       AWS_ACCESS_KEY_ID:
@@ -71,8 +71,10 @@ on:
         required: false
       AWS_SESSION_TOKEN:
         required: false
+
       PLAYSTORE_SERVICE_ACCOUNT:
         required: false
+
       APPSTORE_ISSUER_ID:
         required: false
       APPSTORE_KEY_ID:
@@ -97,6 +99,7 @@ jobs:
 
       - name: Download Android Build Artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: build-output
           path: release/android
@@ -107,6 +110,13 @@ jobs:
         with:
           name: ios-build-output
           path: release/ios
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== Android ==="
+          ls -R release/android || true
+          echo "=== iOS ==="
+          ls -R release/ios || true
 
       - name: Determine Next GitHub Version
         id: version_check
@@ -130,6 +140,8 @@ jobs:
           tag_name: v${{ steps.version_check.outputs.version }}
           name: Release v${{ steps.version_check.outputs.version }}
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload APK to GitHub Release (if exists)
         run: |
@@ -139,6 +151,22 @@ jobs:
               v${{ steps.version_check.outputs.version }} \
               "$apk" \
               --clobber
+          else
+            echo "No APK found. Skipping."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload AAB to GitHub Release (if exists)
+        run: |
+          aab=$(find release -name "*.aab" | head -n 1)
+          if [ -n "$aab" ]; then
+            gh release upload \
+              v${{ steps.version_check.outputs.version }} \
+              "$aab" \
+              --clobber
+          else
+            echo "No AAB found. Skipping."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,10 +179,11 @@ jobs:
               v${{ steps.version_check.outputs.version }} \
               "$ipa" \
               --clobber
+          else
+            echo "No IPA found. Skipping."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
 
   # ---------------------------------------------------------------------------
   # DEPLOY TO AWS (OPTIONAL)
@@ -194,16 +223,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download Build Artifacts
+      - name: Download Android Build Artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-output
-          path: release
+          path: release/android
 
       - name: Find AAB (skip if not found)
         id: bundle
         run: |
-          bundle=$(find release -name "*.aab" | head -n 1)
+          bundle=$(find release/android -name "*.aab" | head -n 1)
 
           if [ -z "$bundle" ]; then
             echo "⚠️ No AAB found. Skipping Play Store deployment."
@@ -214,22 +243,17 @@ jobs:
           echo "bundle=$bundle" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
 
-      # -----------------------------------------------------------------------
-      # Upload AAB + Metadata + Images
-      # -----------------------------------------------------------------------
       - name: Upload to Google Play Store
         if: steps.bundle.outputs.skip == 'false'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_SERVICE_ACCOUNT }}
           packageName: ${{ inputs.package_name }}
-
           releaseFiles: ${{ steps.bundle.outputs.bundle }}
 
           track: ${{ inputs.playstore_track }}
           status: ${{ inputs.playstore_status }}
 
-          # 🔥 Store listing automation
           metadataPath: ${{ inputs.playstore_metadata_path }}
           imagesPath: ${{ inputs.playstore_images_path }}
 
@@ -245,11 +269,23 @@ jobs:
     runs-on: macos-latest
 
     steps:
+      - name: Validate iOS bundle id input
+        run: |
+          if [ -z "${{ inputs.ios_bundle_id }}" ]; then
+            echo "❌ inputs.ios_bundle_id is required when deploy_to_testflight=true"
+            exit 1
+          fi
+
       - name: Download iOS Build Artifacts
         uses: actions/download-artifact@v4
         with:
           name: ios-build-output
           path: release/ios
+
+      - name: List iOS artifact contents
+        run: |
+          echo "=== release/ios tree ==="
+          ls -R release/ios || true
 
       - name: Find IPA (skip if not found)
         id: ipa
@@ -274,10 +310,14 @@ jobs:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          IOS_BUNDLE_ID: ${{ inputs.ios_bundle_id }}
+          IPA_PATH: ${{ steps.ipa.outputs.ipa }}
         run: |
+          set -e
           mkdir -p ios/fastlane
+
+          # Minimal Appfile (API key auth doesn't need apple_id)
           cat > ios/fastlane/Appfile <<EOF
-          apple_id("rite@ritetechnologies.net")
           team_id("8H4QNV2FVL")
           EOF
 
@@ -292,6 +332,7 @@ jobs:
                 key_content: ENV["APPSTORE_PRIVATE_KEY"],
                 is_key_content_base64: false
               )
+
               upload_to_testflight(
                 api_key: api_key,
                 ipa: ENV["IPA_PATH"],
@@ -301,5 +342,4 @@ jobs:
           end
           EOF
 
-          IPA_PATH="${{ steps.ipa.outputs.ipa }}" fastlane ios upload
-
+          fastlane ios upload
