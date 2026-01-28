@@ -265,6 +265,12 @@ jobs:
       - name: Flutter Pub Get
         run: flutter pub get
 
+      - name: Flutter Precache iOS
+        run: flutter precache --ios
+
+      - name: Generate iOS config
+        run: flutter build ios --debug --no-codesign || true
+
       - name: Install CocoaPods
         run: |
           sudo gem install cocoapods -N || true
