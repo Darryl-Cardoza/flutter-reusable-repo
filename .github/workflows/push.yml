@@ -301,11 +301,18 @@ jobs:
   build_ios:
     name: Build iOS (Debug / Release)
     runs-on: macos-latest
-    needs: [dart_analyzer, run_tests]
+    needs: [ dart_analyzer, run_tests ]
     if: ${{ inputs.build_ios }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate iOS bundle id input
+        run: |
+          if [ -z "${{ inputs.ios_bundle_id }}" ]; then
+            echo "❌ inputs.ios_bundle_id is required when build_ios=true"
+            exit 1
+          fi
 
       - name: Setup Flutter
         uses: Darryl-Cardoza/flutter-reusable-repo/.github/actions/setup-flutter@main
@@ -320,7 +327,7 @@ jobs:
         run: |
           sudo gem install cocoapods -N || true
           pod --version
-          
+
       - name: Generate iOS Flutter config
         run: |
           flutter --version
@@ -338,19 +345,10 @@ jobs:
         run: |
           set -e
           PBXPROJ="ios/Runner.xcodeproj/project.pbxproj"
-          
-          # Remove the specifier line entirely (best)
           sed -i '' '/PROVISIONING_PROFILE_SPECIFIER/d' "$PBXPROJ" || true
-          
-          # Remove PROVISIONING_PROFILE too (older format)
           sed -i '' '/PROVISIONING_PROFILE =/d' "$PBXPROJ" || true
-          
-          # Force automatic signing
           sed -i '' 's/CODE_SIGN_STYLE = Manual;/CODE_SIGN_STYLE = Automatic;/g' "$PBXPROJ" || true
 
-      # ----------------------------
-      # Detect iOS Signing Assets
-      # ----------------------------
       - name: Check iOS Signing Availability
         id: ios_signing_check
         run: |
@@ -364,9 +362,6 @@ jobs:
             echo "✅ iOS signing assets found. Building RELEASE IPA."
           fi
 
-      # ----------------------------
-      # RELEASE BUILD (SIGNED IPA)
-      # ----------------------------
       - name: Install iOS Certificate + Profile
         if: steps.ios_signing_check.outputs.has_signing == 'true'
         env:
@@ -380,16 +375,12 @@ jobs:
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASSWORD="temp_pw"
 
-          # Create + unlock keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Make it default (IMPORTANT)
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
 
-          # Import certificate (.p12)
           echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" \
             -k "$KEYCHAIN_PATH" \
@@ -397,54 +388,55 @@ jobs:
             -T /usr/bin/codesign \
             -T /usr/bin/security
 
-          # Allow codesign to access key without UI prompt
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Install provisioning profile using UUID filename (IMPORTANT)
+          echo "=== Code signing identities ==="
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
           echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
 
           UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
           cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
-
           echo "✅ Installed provisioning profile UUID=$UUID"
 
-          # Validate profile matches the expected bundle id (IMPORTANT)
           APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
           PROFILE_BUNDLE="${APP_ID#*.}"
 
           echo "Expected iOS bundle id: ${IOS_BUNDLE_ID}"
           echo "Profile bundle id:      ${PROFILE_BUNDLE}"
 
-          if [ -n "${IOS_BUNDLE_ID}" ] && [ "${PROFILE_BUNDLE}" != "${IOS_BUNDLE_ID}" ]; then
+          if [ "${PROFILE_BUNDLE}" != "${IOS_BUNDLE_ID}" ]; then
             echo "❌ Provisioning profile bundle id does not match inputs.ios_bundle_id"
             exit 1
           fi
-      
 
-      # Build signed IPA (requires signing assets present in project settings)
       - name: Build RELEASE IPA
         if: steps.ios_signing_check.outputs.has_signing == 'true'
         run: |
           flutter build ipa --release
 
-      # ----------------------------
-      # DEBUG BUILD (NO SIGNING)
-      # ----------------------------
+      - name: Ensure IPA exists
+        if: steps.ios_signing_check.outputs.has_signing == 'true'
+        run: |
+          ls -la build/ios/ipa || true
+          ipa=$(find build/ios/ipa -name "*.ipa" | head -n 1)
+          if [ -z "$ipa" ]; then
+            echo "❌ IPA not produced. Signing/export failed."
+            exit 1
+          fi
+
       - name: Build DEBUG iOS (no codesign)
         if: steps.ios_signing_check.outputs.has_signing == 'false'
         run: |
           flutter build ios --debug --no-codesign
 
-      # ----------------------------
-      # Upload Artifacts
-      # ----------------------------
       - name: Upload iOS Build Output
         uses: actions/upload-artifact@v4
         with:
           name: ios-build-output
           path: |
+            build/ios/ipa/*.ipa
             build/ios/iphoneos/*.app
             build/ios/iphoneos/Runner.app
-            build/ios/ipa/*.ipa
