@@ -334,6 +334,20 @@ jobs:
           pod install --repo-update
           cd ..
 
+      - name: Remove hardcoded provisioning profile specifier (CI fix)
+        run: |
+          set -e
+          PBXPROJ="ios/Runner.xcodeproj/project.pbxproj"
+          
+          # Remove the specifier line entirely (best)
+          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER/d' "$PBXPROJ" || true
+          
+          # Remove PROVISIONING_PROFILE too (older format)
+          sed -i '' '/PROVISIONING_PROFILE =/d' "$PBXPROJ" || true
+          
+          # Force automatic signing
+          sed -i '' 's/CODE_SIGN_STYLE = Manual;/CODE_SIGN_STYLE = Automatic;/g' "$PBXPROJ" || true
+
       # ----------------------------
       # Detect iOS Signing Assets
       # ----------------------------
