@@ -23,9 +23,12 @@ on:
         type: boolean
         default: false
 
-      # 🔥 Play Store inputs
       package_name:
         required: true
+        type: string
+
+      ios_bundle_id:
+        required: false
         type: string
 
       version_name:
@@ -345,26 +348,55 @@ jobs:
           P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
           PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          IOS_BUNDLE_ID: ${{ inputs.ios_bundle_id }}
         run: |
-          # Create a temporary keychain
+          set -e
+
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASSWORD="temp_pw"
 
+          # Create + unlock keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
 
-          # Import certificate
+          # Make it default (IMPORTANT)
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          # Import certificate (.p12)
           echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
 
           # Allow codesign to access key without UI prompt
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Install provisioning profile
+          # Install provisioning profile using UUID filename (IMPORTANT)
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo "$PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+
+          echo "✅ Installed provisioning profile UUID=$UUID"
+
+          # Validate profile matches the expected bundle id (IMPORTANT)
+          APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          PROFILE_BUNDLE="${APP_ID#*.}"
+
+          echo "Expected iOS bundle id: ${IOS_BUNDLE_ID}"
+          echo "Profile bundle id:      ${PROFILE_BUNDLE}"
+
+          if [ -n "${IOS_BUNDLE_ID}" ] && [ "${PROFILE_BUNDLE}" != "${IOS_BUNDLE_ID}" ]; then
+            echo "❌ Provisioning profile bundle id does not match inputs.ios_bundle_id"
+            exit 1
+          fi
+      
 
       # Build signed IPA (requires signing assets present in project settings)
       - name: Build RELEASE IPA
