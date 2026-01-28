@@ -306,6 +306,13 @@ jobs:
         run: |
           sudo gem install cocoapods -N || true
           pod --version
+          
+      - name: Generate iOS Flutter config
+        run: |
+          flutter --version
+          flutter pub get
+          flutter precache --ios
+          flutter build ios --debug --no-codesign || true
 
       - name: Pod Install
         run: |
