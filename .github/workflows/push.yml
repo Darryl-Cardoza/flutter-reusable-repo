@@ -282,6 +282,17 @@ jobs:
           flutter build apk --debug \
             --build-name=${{ inputs.version_name }} \
             --build-number=1
+
+      # ----------------------------
+      # Upload Artifacts
+      # ----------------------------
+      - name: Upload Android Build Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/flutter-apk/app-debug.apk
           
 
   # ---------------------------------------------------------------------------
@@ -423,11 +434,3 @@ jobs:
             build/ios/iphoneos/*.app
             build/ios/iphoneos/Runner.app
             build/ios/ipa/*.ipa
-
-      - name: Upload Android Build Output
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-output
-          path: |
-            build/app/outputs/bundle/release/*.aab
-            build/app/outputs/flutter-apk/app-debug.apk
