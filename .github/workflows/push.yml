@@ -187,9 +187,7 @@ jobs:
           flutter_channel: ${{ inputs.flutter_channel }}
 
       - name: Build APK (unsigned)
-        run: flutter build apk --release \
-          --build-name=${{ inputs.version_name }} \
-          --build-number=1
+        run: flutter build apk --release --build-name=${{ inputs.version_name }} --build-number=1
 
       - name: Build AAB (unsigned)
         run: flutter build appbundle --release --build-name=${{ inputs.version_name }} --build-number=1
