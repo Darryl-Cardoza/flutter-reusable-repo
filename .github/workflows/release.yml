@@ -61,6 +61,26 @@ on:
         type: string
         default: ''
 
+      build_number:
+        required: false
+        type: string
+        default: '1'
+
+      enable_whats_new:
+        required: false
+        type: boolean
+        default: false
+
+      whats_new_text:
+        required: false
+        type: string
+        default: ''
+
+      whats_new_path:
+        required: false
+        type: string
+        default: ''
+
     secrets:
       # AWS Secrets (optional)
       AWS_ACCESS_KEY_ID:
@@ -256,7 +276,37 @@ jobs:
         run: |
           flutter build appbundle --release \
             --build-name=${{ inputs.version }} \
-            --build-number=1
+            --build-number=${{ inputs.build_number }}
+          
+      - name: Write Play Store "What's New" changelog
+        if: ${{ inputs.enable_whats_new }}
+        run: |
+          set -e
+
+          NOTES=""
+          if [ -n "${{ inputs.whats_new_path }}" ]; then
+            if [ ! -f "${{ inputs.whats_new_path }}" ]; then
+              echo "❌ whats_new_path not found: ${{ inputs.whats_new_path }}"
+              exit 1
+            fi
+            NOTES="$(cat "${{ inputs.whats_new_path }}")"
+          else
+            NOTES="${{ inputs.whats_new_text }}"
+          fi
+
+          if [ -z "$NOTES" ]; then
+            echo "❌ enable_whats_new=true but no whats_new_text/whats_new_path provided"
+            exit 1
+          fi
+
+          LANG="en-US"
+          VERSION_CODE="${{ inputs.build_number }}"
+          DEST="${{ inputs.playstore_metadata_path }}/${LANG}/changelogs"
+          mkdir -p "$DEST"
+          printf "%s\n" "$NOTES" > "$DEST/${VERSION_CODE}.txt"
+
+          echo "✅ Wrote changelog to $DEST/${VERSION_CODE}.txt"
+
 
       - name: Upload to Google Play Store
         uses: r0adkll/upload-google-play@v1
@@ -493,4 +543,27 @@ jobs:
           }
           EOF
           
-          fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
+          CHANGELOG=""
+          if [ "${{ inputs.enable_whats_new }}" = "true" ]; then
+            if [ -n "${{ inputs.whats_new_path }}" ]; then
+              if [ ! -f "${{ inputs.whats_new_path }}" ]; then
+                echo "❌ whats_new_path not found: ${{ inputs.whats_new_path }}"
+                exit 1
+              fi
+              CHANGELOG="$(cat "${{ inputs.whats_new_path }}")"
+            else
+              CHANGELOG="${{ inputs.whats_new_text }}"
+            fi
+
+            if [ -z "$CHANGELOG" ]; then
+              echo "❌ enable_whats_new=true but whats_new_text/whats_new_path is empty"
+              exit 1
+            fi
+          fi
+
+          if [ -n "$CHANGELOG" ]; then
+            fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json --changelog "$CHANGELOG"
+          else
+            fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
+          fi
+
