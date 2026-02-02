@@ -61,6 +61,11 @@ on:
         type: string
         default: ''
 
+      ios_team_id:
+        required: false
+        type: string
+        default: ''
+
     secrets:
       # AWS Secrets (optional)
       AWS_ACCESS_KEY_ID:
@@ -339,6 +344,48 @@ jobs:
           echo "🔎 Default keychain:"
           security default-keychain -d user
 
+      - name: Generate ExportOptions.plist
+        run: |
+          set -e
+          if [ -z "${{ inputs.ios_bundle_id }}" ]; then
+            echo "❌ inputs.ios_bundle_id required for iOS export"
+            exit 1
+          fi
+          if [ -z "${{ inputs.ios_team_id }}" ]; then
+            echo "❌ inputs.ios_team_id required for manual signing"
+            exit 1
+          fi
+      
+          cat > ios/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+      
+            <key>signingStyle</key>
+            <string>manual</string>
+      
+            <key>teamID</key>
+            <string>${{ inputs.ios_team_id }}</string>
+      
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${{ inputs.ios_bundle_id }}</key>
+              <string>DevOpsReleaseProfile</string>
+            </dict>
+      
+            <key>compileBitcode</key>
+            <false/>
+      
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+
       - name: Export IPA
         run: |
           set -e
@@ -360,6 +407,18 @@ jobs:
             -archivePath "$ARCHIVE" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist ios/ExportOptions.plist
+
+      - name: Verify embedded.mobileprovision exists
+        run: |
+          set -e
+          IPA=$(find "$RUNNER_TEMP/export" -name "*.ipa" | head -n 1)
+          rm -rf /tmp/ipa_check
+          mkdir -p /tmp/ipa_check
+          unzip -q "$IPA" -d /tmp/ipa_check
+          APP=$(find /tmp/ipa_check/Payload -maxdepth 1 -name "*.app" | head -n 1)
+          test -f "$APP/embedded.mobileprovision" || (echo "❌ embedded.mobileprovision missing"; exit 1)
+          echo "✅ embedded.mobileprovision found"
+
 
       - name: Upload signed IPA
         uses: actions/upload-artifact@v4
