@@ -299,10 +299,12 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
 
+          # ✅ make Xcode/codesign actually search this keychain
           security list-keychains -d user -s "$KEYCHAIN"
           security default-keychain -d user -s "$KEYCHAIN"
 
           echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
           security import "$RUNNER_TEMP/cert.p12" \
             -k "$KEYCHAIN" \
             -P "$P12_PASSWORD" \
@@ -310,7 +312,7 @@ jobs:
             -T /usr/bin/security \
             -T /usr/bin/xcodebuild
 
-          # allow codesign to use the imported key without UI prompts
+          # ✅ allow non-interactive signing
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -321,9 +323,21 @@ jobs:
 
           echo "✅ Installed provisioning profile UUID: $UUID"
 
-          echo "🔎 Available signing identities:"
-          security find-identity -p codesigning -v "$KEYCHAIN" || true
-      
+          echo "🔎 Identities found:"
+          security find-identity -p codesigning -v
+    
+
+      - name: Verify signing identities
+        run: |
+          set -e
+          echo "🔎 Available code signing identities:"
+          security find-identity -p codesigning -v
+          
+          echo "🔎 Keychains:"
+          security list-keychains -d user
+          
+          echo "🔎 Default keychain:"
+          security default-keychain -d user
 
       - name: Export IPA
         run: |
