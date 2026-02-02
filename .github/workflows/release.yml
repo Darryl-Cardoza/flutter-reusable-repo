@@ -405,7 +405,7 @@ jobs:
         env:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPSTORE_PRIVATE_KEY_P8_BASE64 }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
           set -e
 
@@ -417,7 +417,7 @@ jobs:
           fi
 
           # decode p8 to file
-          echo "$APPSTORE_PRIVATE_KEY_P8_BASE64" | base64 --decode > AuthKey.p8
+          echo "$APPSTORE_PRIVATE_KEY" | base64 --decode > AuthKey.p8
           perl -pi -e 's/\r\n/\n/g' AuthKey.p8
 
           # convert file content into JSON-safe string with \n
