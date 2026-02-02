@@ -225,19 +225,36 @@ jobs:
       - name: Build iOS Archive (no codesign)
         run: |
           set -e
+
           flutter build ios --release --no-codesign
+
+          ARCHIVE_DIR="$RUNNER_TEMP/ios-archive"
+          ARCHIVE_PATH="$ARCHIVE_DIR/Runner.xcarchive"
+
+          mkdir -p "$ARCHIVE_DIR"
+
           cd ios
           xcodebuild -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
-            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -archivePath "$ARCHIVE_PATH" \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             archive
           cd ..
 
+          if [ ! -d "$ARCHIVE_PATH" ]; then
+            echo "❌ Archive not found at: $ARCHIVE_PATH"
+            ls -la "$ARCHIVE_DIR" || true
+            exit 1
+          fi
+
+          echo "✅ Archive created at: $ARCHIVE_PATH"
+          ls -la "$ARCHIVE_PATH"
+
       - name: Upload iOS Archive (unsigned)
         uses: actions/upload-artifact@v4
         with:
           name: ios-archive-unsigned
-          path: ${{ runner.temp }}/Runner.xcarchive
+          path: ${{ runner.temp }}/ios-archive/Runner.xcarchive
+

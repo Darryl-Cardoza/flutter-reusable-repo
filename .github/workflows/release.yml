@@ -163,16 +163,25 @@ jobs:
 
       - name: Decode Keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > /tmp/android/upload-keystore.jks
+          set -e
+          mkdir -p /tmp/android
+          printf "%s" "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > /tmp/android/upload-keystore.jks
 
       - name: Sign APK
         run: |
           set -e
           APK=$(find release/android -name "*release*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "No release APK found under release/android"
+            find release/android -maxdepth 4 -type f
+            exit 1
+          fi
+
           zipalign -f 4 "$APK" /tmp/aligned.apk
 
           apksigner sign \
-            --ks /tmp/upload-keystore.jks \
+            --ks /tmp/android/upload-keystore.jks \
             --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
             --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
             --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
@@ -280,7 +289,21 @@ jobs:
 
       - name: Export IPA
         run: |
-          ARCHIVE=$(find release/ios -name "*.xcarchive" | head -n 1)
+          set -e
+
+          echo "Listing release/ios:"
+          ls -la release/ios || true
+          find release/ios -maxdepth 5 -print || true
+
+          ARCHIVE=$(find release/ios -type d -name "*.xcarchive" | head -n 1)
+
+          if [ -z "$ARCHIVE" ]; then
+            echo "No .xcarchive directory found in release/ios"
+            exit 1
+          fi
+
+          echo "Using archive: $ARCHIVE"
+
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE" \
             -exportPath "$RUNNER_TEMP/export" \
