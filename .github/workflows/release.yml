@@ -56,7 +56,7 @@ on:
         type: boolean
         default: false
 
-      ios_team_id:
+      ios_bundle_id:
         required: false
         type: string
         default: ''
