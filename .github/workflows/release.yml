@@ -553,7 +553,10 @@ jobs:
           if [ -n "$CHANGELOG" ]; then
             fastlane pilot upload --ipa "$IPA" \
               --api_key_path api_key.json \
+              --groups "Internal" \
               --changelog "$CHANGELOG"
           else
             fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
           fi
+
+
