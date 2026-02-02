@@ -383,8 +383,23 @@ jobs:
           name: ios-ipa-signed
           path: release/ios
 
+      # ✅ Pin Ruby (avoid /opt/homebrew Ruby/OpenSSL issues)
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"   # 3.2 is very stable with fastlane
+          bundler-cache: false
+
       - name: Install fastlane
-        run: sudo gem install fastlane -N
+        run: gem install fastlane -N
+
+      # (Optional) print versions for debugging
+      - name: Debug Ruby/OpenSSL/Fastlane
+        run: |
+          ruby -v
+          which ruby
+          ruby -ropenssl -e 'puts OpenSSL::OPENSSL_VERSION'
+          fastlane --version
 
       - name: Upload to TestFlight
         env:
@@ -393,23 +408,24 @@ jobs:
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
           set -e
-          
+
           IPA=$(find release/ios -name "*.ipa" | head -n 1)
           if [ -z "$IPA" ]; then
             echo "❌ No IPA found in release/ios"
-            find release/ios -maxdepth 4 -type f
+            find release/ios -maxdepth 6 -type f
             exit 1
           fi
-          
-          # write API key file for fastlane
+
+          echo "$APPSTORE_PRIVATE_KEY" | base64 --decode > AuthKey.p8
+          perl -pi -e 's/\r\n/\n/g' AuthKey.p8
+
           cat > api_key.json <<EOF
           {
             "key_id": "${APPSTORE_KEY_ID}",
             "issuer_id": "${APPSTORE_ISSUER_ID}",
-            "key": "${APPSTORE_PRIVATE_KEY}",
+            "key_filepath": "AuthKey.p8",
             "in_house": false
           }
           EOF
-          
-          # upload
+
           fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
