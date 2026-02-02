@@ -51,6 +51,21 @@ on:
         type: string
         default: playstore/images
 
+      deploy_to_esper:
+        required: false
+        type: boolean
+        default: false
+
+      esper_org_id:
+        required: false
+        type: string
+        default: ""
+
+      esper_app_id:
+        required: false
+        type: string
+        default: ""
+
       deploy_to_testflight:
         required: false
         type: boolean
@@ -115,6 +130,11 @@ on:
       APPSTORE_PRIVATE_KEY:
         required: false
 
+      # Esper Credentials
+      ESPER_API_KEY:
+        required: false
+
+
 jobs:
   # CREATE GITHUB RELEASE
   create_release:
@@ -167,7 +187,7 @@ jobs:
   # SIGN ANDROID
   sign_android:
     name: Sign Android
-    if: ${{ inputs.deploy_to_playstore }}
+    if: ${{ inputs.deploy_to_playstore || inputs.deploy_to_esper }}
     needs: create_release
     runs-on: ubuntu-latest
 
@@ -273,7 +293,7 @@ jobs:
             --build-name=${{ inputs.version }} \
             --build-number=${{ inputs.build_number }}
           
-      - name: Write Play Store "What's New" changelog
+      - name: Prepare Play Store "What's New" (whatsNewDirectory)
         if: ${{ inputs.enable_whats_new }}
         run: |
           set -e
@@ -288,16 +308,11 @@ jobs:
             exit 1
           fi
 
-          NOTES=$(cat "${{ inputs.whats_new_file }}")
-
           LANG="en-US"
-          VERSION_CODE="${{ inputs.build_number }}"
-          DEST="${{ inputs.playstore_metadata_path }}/${LANG}/changelogs"
-          mkdir -p "$DEST"
+          mkdir -p "$RUNNER_TEMP/whatsnew/${LANG}"
+          cp "${{ inputs.whats_new_file }}" "$RUNNER_TEMP/whatsnew/${LANG}/whatsnew"
 
-          printf "%s\n" "$NOTES" > "$DEST/${VERSION_CODE}.txt"
-
-          echo "✅ Android changelog written from file"
+          echo "✅ whatsNewDirectory prepared at: $RUNNER_TEMP/whatsnew"
 
       - name: Upload to Google Play Store
         uses: r0adkll/upload-google-play@v1
@@ -307,9 +322,8 @@ jobs:
           releaseFiles: build/app/outputs/bundle/release/*.aab
           track: ${{ inputs.playstore_track }}
           status: ${{ inputs.playstore_status }}
-          metadataPath: ${{ inputs.playstore_metadata_path }}
-          imagesPath: ${{ inputs.playstore_images_path }}
           inAppUpdatePriority: 2
+          whatsNewDirectory: ${{ inputs.enable_whats_new && format('{0}/whatsnew', runner.temp) || '' }}
 
   # SIGN iOS (EXPORT IPA FROM ARCHIVE)
   sign_ios:
@@ -513,18 +527,16 @@ jobs:
             exit 1
           fi
 
-          # decode p8 to file
           echo "$APPSTORE_PRIVATE_KEY" | base64 --decode > AuthKey.p8
           perl -pi -e 's/\r\n/\n/g' AuthKey.p8
 
-          # convert file content into JSON-safe string with \n
           KEY_ESCAPED=$(python3 - <<'PY'
           import json
           p = open("AuthKey.p8", "r", encoding="utf-8").read()
-          print(json.dumps(p)[1:-1])  # remove surrounding quotes
+          print(json.dumps(p)[1:-1])
           PY
           )
-          
+
           cat > api_key.json <<EOF
           {
             "key_id": "${APPSTORE_KEY_ID}",
@@ -533,30 +545,81 @@ jobs:
             "in_house": false
           }
           EOF
-          
-          CHANGELOG=""
 
+          CHANGELOG=""
           if [ "${{ inputs.enable_whats_new }}" = "true" ]; then
             if [ -z "${{ inputs.whats_new_file }}" ]; then
               echo "❌ whats_new_file not provided"
               exit 1
             fi
-
             if [ ! -f "${{ inputs.whats_new_file }}" ]; then
               echo "❌ File not found: ${{ inputs.whats_new_file }}"
               exit 1
             fi
-
             CHANGELOG="$(cat "${{ inputs.whats_new_file }}")"
           fi
 
+          # ✅ IMPORTANT:
+          # Use --distribute_external for external testers (optional)
+          # For internal testers, groups must exist in App Store Connect.
+          #
+          # If your group name is different, change "Internal" to your group name.
+          GROUP_NAME="Internal"
+
           if [ -n "$CHANGELOG" ]; then
-            fastlane pilot upload --ipa "$IPA" \
+            fastlane pilot upload \
+              --ipa "$IPA" \
               --api_key_path api_key.json \
-              --groups "Internal" \
+              --groups "$GROUP_NAME" \
               --changelog "$CHANGELOG"
           else
-            fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
+            fastlane pilot upload \
+              --ipa "$IPA" \
+              --api_key_path api_key.json \
+              --groups "$GROUP_NAME"
           fi
 
 
+  deploy_esper:
+    name: Deploy to Esper
+    if: ${{ inputs.deploy_to_esper }}
+    needs: sign_android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download signed APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-signed
+          path: release/android
+
+      - name: Upload to Esper
+        env:
+          ESPER_API_KEY: ${{ secrets.ESPER_API_KEY }}
+          ESPER_ORG_ID: ${{ inputs.esper_org_id }}
+          ESPER_APP_ID: ${{ inputs.esper_app_id }}
+        run: |
+          set -e
+
+          if [ -z "$ESPER_ORG_ID" ] || [ -z "$ESPER_APP_ID" ]; then
+            echo "❌ esper_org_id and esper_app_id are required"
+            exit 1
+          fi
+
+          APK=$(find release/android -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "❌ No signed APK found"
+            find release/android -maxdepth 6 -type f
+            exit 1
+          fi
+
+          echo "✅ Uploading $APK to Esper..."
+
+          curl -sS -X POST "https://api.esper.io/v0/enterprise/${ESPER_ORG_ID}/apps/${ESPER_APP_ID}/versions/" \
+            -H "Authorization: Bearer ${ESPER_API_KEY}" \
+            -F "apk=@${APK}" \
+            -F "releaseNotes=CI build $GITHUB_RUN_NUMBER" \
+            -o esper_response.json
+
+          echo "Esper response:"
+          cat esper_response.json
