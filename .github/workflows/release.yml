@@ -161,6 +161,24 @@ jobs:
           name: android-debug-outputs
           path: release/android
 
+      - name: Install Android build-tools (zipalign/apksigner)
+        uses: android-actions/setup-android@v3
+
+      - name: Install Build Tools 34.0.0
+        run: |
+          set -e
+          sdkmanager "build-tools;34.0.0" "platform-tools" >/dev/null
+          echo "$ANDROID_SDK_ROOT/build-tools/34.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+
+      - name: Verify tools
+        run: |
+          which zipalign
+          which apksigner
+          zipalign -h | head -n 1
+          apksigner --version
+
+
       - name: Decode Keystore
         run: |
           set -e
