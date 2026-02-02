@@ -71,12 +71,7 @@ on:
         type: boolean
         default: false
 
-      whats_new_text:
-        required: false
-        type: string
-        default: ''
-
-      whats_new_path:
+      whats_new_file:
         required: false
         type: string
         default: ''
@@ -283,30 +278,26 @@ jobs:
         run: |
           set -e
 
-          NOTES=""
-          if [ -n "${{ inputs.whats_new_path }}" ]; then
-            if [ ! -f "${{ inputs.whats_new_path }}" ]; then
-              echo "❌ whats_new_path not found: ${{ inputs.whats_new_path }}"
-              exit 1
-            fi
-            NOTES="$(cat "${{ inputs.whats_new_path }}")"
-          else
-            NOTES="${{ inputs.whats_new_text }}"
-          fi
-
-          if [ -z "$NOTES" ]; then
-            echo "❌ enable_whats_new=true but no whats_new_text/whats_new_path provided"
+          if [ -z "${{ inputs.whats_new_file }}" ]; then
+            echo "❌ whats_new_file not provided"
             exit 1
           fi
+
+          if [ ! -f "${{ inputs.whats_new_file }}" ]; then
+            echo "❌ File not found: ${{ inputs.whats_new_file }}"
+            exit 1
+          fi
+
+          NOTES=$(cat "${{ inputs.whats_new_file }}")
 
           LANG="en-US"
           VERSION_CODE="${{ inputs.build_number }}"
           DEST="${{ inputs.playstore_metadata_path }}/${LANG}/changelogs"
           mkdir -p "$DEST"
+
           printf "%s\n" "$NOTES" > "$DEST/${VERSION_CODE}.txt"
 
-          echo "✅ Wrote changelog to $DEST/${VERSION_CODE}.txt"
-
+          echo "✅ Android changelog written from file"
 
       - name: Upload to Google Play Store
         uses: r0adkll/upload-google-play@v1
@@ -544,26 +535,25 @@ jobs:
           EOF
           
           CHANGELOG=""
-          if [ "${{ inputs.enable_whats_new }}" = "true" ]; then
-            if [ -n "${{ inputs.whats_new_path }}" ]; then
-              if [ ! -f "${{ inputs.whats_new_path }}" ]; then
-                echo "❌ whats_new_path not found: ${{ inputs.whats_new_path }}"
-                exit 1
-              fi
-              CHANGELOG="$(cat "${{ inputs.whats_new_path }}")"
-            else
-              CHANGELOG="${{ inputs.whats_new_text }}"
-            fi
 
-            if [ -z "$CHANGELOG" ]; then
-              echo "❌ enable_whats_new=true but whats_new_text/whats_new_path is empty"
+          if [ "${{ inputs.enable_whats_new }}" = "true" ]; then
+            if [ -z "${{ inputs.whats_new_file }}" ]; then
+              echo "❌ whats_new_file not provided"
               exit 1
             fi
+
+            if [ ! -f "${{ inputs.whats_new_file }}" ]; then
+              echo "❌ File not found: ${{ inputs.whats_new_file }}"
+              exit 1
+            fi
+
+            CHANGELOG="$(cat "${{ inputs.whats_new_file }}")"
           fi
 
           if [ -n "$CHANGELOG" ]; then
-            fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json --changelog "$CHANGELOG"
+            fastlane pilot upload --ipa "$IPA" \
+              --api_key_path api_key.json \
+              --changelog "$CHANGELOG"
           else
             fastlane pilot upload --ipa "$IPA" --api_key_path api_key.json
           fi
-
