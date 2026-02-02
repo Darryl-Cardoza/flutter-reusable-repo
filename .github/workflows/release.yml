@@ -56,11 +56,6 @@ on:
         type: boolean
         default: false
 
-      ios_bundle_id:
-        required: false
-        type: string
-        default: ''
-
       ios_team_id:
         required: false
         type: string
@@ -88,6 +83,8 @@ on:
         required: false
 
       # iOS Signing
+      IOS_TEAM_ID:
+        required: false
       IOS_CERT_P12_BASE64:
         required: false
       IOS_CERT_PASSWORD:
@@ -351,7 +348,7 @@ jobs:
             echo "❌ inputs.ios_bundle_id required for iOS export"
             exit 1
           fi
-          if [ -z "${{ inputs.ios_team_id }}" ]; then
+          if [ -z "${{ secrets.IOS_TEAM_ID }}" ]; then
             echo "❌ inputs.ios_team_id required for manual signing"
             exit 1
           fi
@@ -368,7 +365,7 @@ jobs:
             <string>manual</string>
       
             <key>teamID</key>
-            <string>${{ inputs.ios_team_id }}</string>
+            <string>${{ secrets.IOS_TEAM_ID }}</string>
       
             <key>provisioningProfiles</key>
             <dict>
