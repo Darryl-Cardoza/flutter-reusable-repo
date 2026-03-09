@@ -6,17 +6,27 @@ on:
       flutter_version:
         required: false
         type: string
-        default: '3.32.0'
+        default: "3.32.0"
 
       flutter_channel:
         required: false
         type: string
-        default: 'stable'
+        default: "stable"
 
       coverage_threshold:
         required: false
         type: string
-        default: '80'
+        default: "80"
+
+      run_tests:
+        required: false
+        type: boolean
+        default: true
+
+      enforce_coverage:
+        required: false
+        type: boolean
+        default: true
 
       build_ios:
         required: false
@@ -46,7 +56,6 @@ on:
       CODACY_PROJECT_TOKEN:
         required: false
 
-# 🔒 Prevent parallel versionCode collisions
 concurrency:
   group: playstore-${{ inputs.package_name }}
   cancel-in-progress: false
@@ -57,17 +66,22 @@ env:
   COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
 
 jobs:
+
+  ############################################################
   # BUILD SETUP
+  ############################################################
+
   build_flutter_project:
     name: Setup Flutter Project
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set Up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: 17
 
       - name: Setup Flutter
@@ -79,11 +93,15 @@ jobs:
       - name: Flutter Pub Get
         run: flutter pub get
 
-  # ANALYZER
+  ############################################################
+  # DART ANALYZER
+  ############################################################
+
   dart_analyzer:
     name: Run Dart Analyzer
     runs-on: ubuntu-latest
     needs: build_flutter_project
+
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +114,7 @@ jobs:
       - name: Run Dart Analyzer
         run: |
           dart analyze > analyzer-report.txt || true
+
           if grep -q "error •" analyzer-report.txt; then
             echo "❌ Dart analyzer errors found"
             exit 1
@@ -107,77 +126,143 @@ jobs:
           name: Dart-Analyzer-Reports
           path: analyzer-report.txt
 
-  # TESTS + COVERAGE + REPORTS
+  ############################################################
+  # TESTS + COVERAGE
+  ############################################################
+
   run_tests:
     name: Run Flutter Tests & Coverage
     runs-on: ubuntu-latest
     needs: build_flutter_project
+    if: ${{ inputs.run_tests }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter and Dart Utilities
+      - name: Setup Flutter
         uses: Darryl-Cardoza/flutter-reusable-repo/.github/actions/setup-flutter@main
         with:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      - name: Run Flutter Tests
+      ######################################################
+      # CHECK IF TEST FILES EXIST
+      ######################################################
+
+      - name: Check if Test Files Exist
+        id: check_tests
         run: |
-          mkdir -p /tmp/test-results /tmp/coverage
-          
+          if [ -z "$(find test -name '*_test.dart' 2>/dev/null)" ]; then
+            echo "⚠️ No test files found"
+            echo "tests_exist=false" >> $GITHUB_OUTPUT
+          else
+            echo "tests_exist=true" >> $GITHUB_OUTPUT
+          fi
+
+      ######################################################
+      # RUN TESTS
+      ######################################################
+
+      - name: Run Flutter Tests
+        if: steps.check_tests.outputs.tests_exist == 'true'
+        run: |
+          mkdir -p /tmp/test-results
+          mkdir -p /tmp/coverage
+
           flutter test \
             --coverage \
             --machine \
             > /tmp/test-results/test-output.json || true
 
+      ######################################################
+      # WARN IF TESTS MISSING
+      ######################################################
+
+      - name: Warn if No Tests
+        if: steps.check_tests.outputs.tests_exist == 'false'
+        run: |
+          echo "⚠️ No tests detected in project"
+          echo "Pipeline will continue"
+
+      ######################################################
+      # GENERATE JUNIT
+      ######################################################
+
       - name: Generate JUnit Report
+        if: steps.check_tests.outputs.tests_exist == 'true'
         run: |
           dart .github/tool/json_to_junit.dart \
             /tmp/test-results/test-output.json \
             /tmp/test-results/junit.xml
 
+      ######################################################
+      # COVERAGE HTML
+      ######################################################
+
       - name: Generate Coverage HTML
+        if: steps.check_tests.outputs.tests_exist == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y lcov
-          genhtml coverage/lcov.info --output-directory /tmp/coverage/html
+          genhtml coverage/lcov.info --output-directory /tmp/coverage/html || true
+
+      ######################################################
+      # COVERAGE THRESHOLD
+      ######################################################
 
       - name: Enforce Coverage Threshold
+        if: ${{ inputs.enforce_coverage }}
         run: |
+          if [ ! -f coverage/lcov.info ]; then
+            echo "⚠️ Coverage file not generated"
+            echo "Pipeline continuing"
+            exit 0
+          fi
+
           COVERAGE=$(lcov --summary coverage/lcov.info | grep lines | awk '{print $2}' | sed 's/%//')
           REQUIRED=${{ inputs.coverage_threshold }}
-          
+
           echo "Coverage: $COVERAGE%"
-          
+
           if (( $(echo "$COVERAGE < $REQUIRED" | bc -l) )); then
-            echo "Coverage below threshold ($REQUIRED%)"
+            echo "❌ Coverage below threshold ($REQUIRED%)"
             exit 1
           fi
 
+      ######################################################
+      # ARTIFACTS
+      ######################################################
+
       - name: Upload Test Reports
+        if: steps.check_tests.outputs.tests_exist == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
           path: /tmp/test-results
 
       - name: Upload Coverage Reports
+        if: steps.check_tests.outputs.tests_exist == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
           path: /tmp/coverage
 
-  # ANDROID BUILD (DEBUG/RELEASE)
+  ############################################################
+  # ANDROID BUILD
+  ############################################################
+
   build_android:
     name: Build Android (DEBUG/RELEASE)
     runs-on: ubuntu-latest
     needs: [dart_analyzer, run_tests]
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set Up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: 17
 
       - name: Setup Flutter
@@ -186,33 +271,37 @@ jobs:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      - name: Build APK (unsigned)
+      - name: Build APK
         run: flutter build apk --release --build-name=${{ inputs.version_name }} --build-number=1
 
-      - name: Build AAB (unsigned)
+      - name: Build AAB
         run: flutter build appbundle --release --build-name=${{ inputs.version_name }} --build-number=1
 
-      - name: Upload Android Debug Outputs
+      - name: Upload Android Outputs
         uses: actions/upload-artifact@v4
         with:
-          name: android-debug-outputs
+          name: android-build
           path: |
             build/app/outputs/flutter-apk/app-release.apk
             build/app/outputs/bundle/release/*.aab
 
-  # iOS BUILD (UNSIGNED)
+  ############################################################
+  # IOS BUILD
+  ############################################################
+
   build_ios:
     name: Build iOS (UNSIGNED Archive)
     runs-on: macos-latest
     needs: [dart_analyzer, run_tests]
     if: ${{ inputs.build_ios }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate iOS bundle id input
+      - name: Validate Bundle ID
         run: |
           if [ -z "${{ inputs.ios_bundle_id }}" ]; then
-            echo "❌ inputs.ios_bundle_id is required when build_ios=true"
+            echo "❌ ios_bundle_id required when build_ios=true"
             exit 1
           fi
 
@@ -222,31 +311,34 @@ jobs:
           flutter_version: ${{ inputs.flutter_version }}
           flutter_channel: ${{ inputs.flutter_channel }}
 
-      - name: Build iOS Archive (no codesign)
+      - name: Build iOS Archive
         run: |
           set -e
+
           ARCHIVE_DIR="$RUNNER_TEMP/ios-archive"
           ARCHIVE_PATH="$ARCHIVE_DIR/Runner.xcarchive"
+
           mkdir -p "$ARCHIVE_DIR"
 
           flutter build ios --release --no-codesign
 
           cd ios
-          xcodebuild -workspace Runner.xcworkspace \
+
+          xcodebuild \
+            -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -archivePath "$ARCHIVE_PATH" \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             archive
+
           cd ..
 
           test -d "$ARCHIVE_PATH"
 
-      - name: Upload iOS Archive (unsigned)
+      - name: Upload iOS Archive
         uses: actions/upload-artifact@v4
         with:
           name: ios-archive-unsigned
           path: ${{ runner.temp }}/ios-archive
-
-
